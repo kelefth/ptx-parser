@@ -1,5 +1,6 @@
 #include <iostream>
 #include <iomanip>
+#include <unistd.h>
 
 #include "InstrStatement.h"
 #include "Operand.h"
@@ -62,9 +63,14 @@ void InstrStatement::dump() {
     const int colWidth = 20;
 
     std::cout << std::left << std::setw(colWidth) << "Label: " + getLabel()
-              << std::setw(colWidth-8) << "Pred: " + Pred
-              << std::setw(colWidth + 5) << "Instr: \033[33m" + Inst + "\033[0m"
-              << "Mods: ";
+              << std::setw(colWidth-8) << "Pred: " + Pred;
+
+    if (isatty(fileno(stdout)))
+        std::cout << std::setw(colWidth + 5) << "Instr: \033[33m" + Inst + "\033[0m";
+    else
+        std::cout << std::setw(colWidth + 5) << "Instr: " + Inst;
+              
+    std::cout << "Mods: ";
 
     int index = 0;
     std::string output = "";
@@ -76,7 +82,17 @@ void InstrStatement::dump() {
 
     std::cout << std::left << std::setw(colWidth) << output;
 
-    std::cout << std::left << std::setw(colWidth-5) << "Type: " + Type;
+    std::cout << "Types: ";
+
+    index = 0;
+    output = "";
+    for (std::string type : Types) {
+        output += type;
+        index++;
+        if (index < Types.size()) output += ", ";
+    }
+
+    std::cout << std::left << std::setw(colWidth-5) << output;
 
     std::cout << "D.Ops: ";
     index = 0;

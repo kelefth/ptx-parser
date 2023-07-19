@@ -17,7 +17,14 @@ enum Token {
     token_comma,
     token_leftbracket,
     token_rightbracket,
+    token_leftcurlybracket,
+    token_rightcurlybracket,
+    token_leftparenth,
+    token_rightparenth,
     token_vbar,
+    token_newline,
+
+    token_plus,
 
     // instructions
     token_abs, token_activemask, token_add, token_addc, token_alloca, token_and, token_applypriority, token_atom,

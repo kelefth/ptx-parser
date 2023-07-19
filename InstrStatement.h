@@ -14,7 +14,7 @@ class InstrStatement : public Statement {
     std::string Pred;
     std::string Inst;
     std::vector<std::string> Modifiers;
-    std::string Type;
+    std::vector<std::string> Types;
     // std::vector<std::variant<std::string, double>> DestOps;
     // std::vector<std::variant<std::string, double>> SourceOps;
     std::vector<std::unique_ptr<Operand>> DestOps;
@@ -26,12 +26,12 @@ public:
         std::string pred,
         std::string inst,
         std::vector<std::string> modifiers,
-        std::string type, 
+        std::vector<std::string> types, 
         // std::vector<std::variant<std::string, double>> destOps,
         // std::vector<std::variant<std::string, double>> sourceOps
         std::vector<std::unique_ptr<Operand>> destOps,
         std::vector<std::unique_ptr<Operand>> sourceOps
-    ) : Statement(label), Pred(pred), Inst(inst), Modifiers(modifiers), Type(type), DestOps(std::move(destOps)), SourceOps(std::move(sourceOps)) {}
+    ) : Statement(label), Pred(pred), Inst(inst), Modifiers(modifiers), Types(types), DestOps(std::move(destOps)), SourceOps(std::move(sourceOps)) {}
 
     // std::string ToString();
     std::vector<std::unique_ptr<Operand>>& getSourceOps();

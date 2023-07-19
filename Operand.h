@@ -4,6 +4,10 @@
 #include <string>
 #include <variant>
 
+#include "AddressExpr.h"
+
+class AddressExpr;
+
 enum OperandType {
     Register,
     Immediate,
@@ -12,17 +16,21 @@ enum OperandType {
 };
 
 class Operand {
-
-    std::variant<std::string, double> Value;
+    std::variant<std::string, double, AddressExpr> Value;
     OperandType Type;
     std::string Dimension;
 
 public:
-    Operand(std::string value, OperandType type) : Value(value), Type(type) {}
-    Operand(double value, OperandType type) : Value(value), Type(type) {}
-    Operand(std::string value, OperandType type, std::string dim) : Value(value), Type(type), Dimension(dim) {}
+    Operand(std::string value, OperandType type);
+    Operand(double value, OperandType type);
+    Operand(AddressExpr value, OperandType type);
+    Operand(std::string value, OperandType type, std::string dim);
 
-    std::variant<std::string, double> getValue();
+    Operand(const Operand& operand);
+
+    std::variant<std::string, double, AddressExpr> getValue();
+    void setValue(std::variant<std::string, double, AddressExpr> value);
+
     OperandType getType();
 
     std::string getDimension();

@@ -342,8 +342,13 @@ int getToken() {
         if (currentToken == -1)
             currentToken = token_id;
     }
-    else if (isdigit(currChar) || currChar == '.') {
+    else if (isdigit(currChar) || currChar == '.' || currChar == '-') {
         string numStr = "";
+
+        if (currChar == '-') {
+            numStr += currChar;
+            currChar = getchar();
+        }
 
         bool dotParsed = false;
         while (
@@ -425,8 +430,21 @@ int getToken() {
         currentToken = token_leftbracket;
     else if (currChar == ']')
         currentToken = token_rightbracket;
+    else if (currChar == '{')
+        currentToken = token_leftcurlybracket;
+    else if (currChar == '}')
+        currentToken = token_rightcurlybracket;
+    else if (currChar == '(')
+        currentToken = token_leftparenth;
+    else if (currChar == ')')
+        currentToken = token_rightparenth;
     else if (currChar == '|')
         currentToken = token_vbar;
+    else if (currChar == '\n')
+        currentToken = token_newline;
+    else if(currChar == '+') {
+        currentToken = token_plus;
+    }
 
     if (currChar == EOF)
         currentToken = token_eof;
@@ -453,7 +471,7 @@ int getToken() {
     //         cout << "type: " << currStrVal << endl;
     //     else if (tokenId == token_direct)
     //         cout << "directive: " << currStrVal << endl;
-    //     else if (tokenId == token_modifier)
+    //     else if (tokenId == token_mod_dir)
     //         cout << "modifier: " << currStrVal << endl;
     //     else if (tokenId == token_reg)
     //         cout << "register: " << currStrVal << endl;
