@@ -8,21 +8,17 @@
 
 class DirectStatement : public Statement {
 
-    std::vector<std::string> Directives;
-    std::string Type;
-    std::vector<std::string> Arguments;
-    std::vector<std::unique_ptr<Statement>> Statements;
+    std::string Directive;
 
 public:
     DirectStatement(
         std::string label,
-        std::vector<std::string> directives,
-        std::string type,
-        std::vector<std::string> arguments,
-        std::vector<std::unique_ptr<Statement>> statements
-    ) : Statement(label), Directives(directives), Type(type), Arguments(arguments), Statements(std::move(statements)) {}
+        std::string directive
+    ) : Statement(label), Directive(directive) {}
 
-    void dump();
+    std::string getDirective() const;
+
+    void dump() const;
 };
 
 #endif

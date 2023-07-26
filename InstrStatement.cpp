@@ -59,7 +59,7 @@ std::vector<std::unique_ptr<Operand>>& InstrStatement::getSourceOps() {
     return SourceOps;
 }
 
-void InstrStatement::dump() {
+void InstrStatement::dump() const {
     const int colWidth = 20;
 
     std::cout << std::left << std::setw(colWidth) << "Label: " + getLabel()

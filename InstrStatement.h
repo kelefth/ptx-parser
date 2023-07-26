@@ -36,7 +36,7 @@ public:
     // std::string ToString();
     std::vector<std::unique_ptr<Operand>>& getSourceOps();
 
-    void dump();
+    void dump() const;
 
 };
 

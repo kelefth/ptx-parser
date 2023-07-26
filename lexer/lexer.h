@@ -43,7 +43,15 @@ enum Token {
     token_txq, token_vabsdiff, token_vabsdiff2, token_vabsdiffh, token_vadd, token_vadd2, token_vadd4, token_vavrg2,
     token_vavrgh, token_vmad, token_vmax, token_vmax2, token_vmax4, token_vmin, token_vmin2, token_vmin4,
     token_vote, token_vset, token_vset2, token_vset4, token_vshl, token_vshr, token_vsub, token_vsub2,
-    token_vsub4, token_wgmma, token_wmma, token_xor
+    token_vsub4, token_wgmma, token_wmma, token_xor,
+
+    //directives
+    token_version_dir,
+    token_target_dir,
+    token_address_size_dir,
+    token_param_dir,
+    token_entry_dir,
+    token_align_dir
 };
 
 extern int currentToken;

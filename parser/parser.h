@@ -10,7 +10,7 @@
 
 // extern std::vector<std::unique_ptr<Statement>> statements;
 // extern std::vector<InstrStatement> statements;
-extern std::vector<std::unique_ptr<Statement>> statements;
+extern std::vector<std::shared_ptr<Statement>> statements;
 
 bool isInstrToken(int token);
 

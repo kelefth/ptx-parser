@@ -12,9 +12,10 @@ public:
     // virtual ~Statement(){}
 
     // virtual std::string ToString();
-    std::string getLabel() { return Label; }
+    std::string getLabel() const { return Label; }
+    void setLabel(const std::string label) { Label = label; }
 
-    virtual void dump() {}
+    virtual void dump() const {}
 
 };
 

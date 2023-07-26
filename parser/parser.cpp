@@ -5,12 +5,15 @@
 #include "parser.h"
 #include "../InstrStatement.h"
 #include "../DirectStatement.h"
+#include "../ModuleDirectStatement.h"
+#include "../ParamDirectStatement.h"
+#include "../KernelDirectStatement.h"
 #include "../Operand.h"
 
 int currentToken;
 // std::vector<std::unique_ptr<Statement>> statements;
 // std::vector<InstrStatement> statements;
-std::vector<std::unique_ptr<Statement>> statements;
+std::vector<std::shared_ptr<Statement>> statements;
 
 bool isInstrToken(int token) {
 
@@ -322,68 +325,163 @@ void ParseInstrStatement() {
     }
 
     // statements.push_back(std::unique_ptr<Statement>(new InstrStatement(label, inst, modifiers, type, destOps, sourceOps)));
-    statements.push_back(std::make_unique<InstrStatement>(label, pred, inst, modifiers, types, std::move(destOps), std::move(sourceOps)));
+    // statements.push_back(std::make_unique<InstrStatement>(label, pred, inst, modifiers, types, std::move(destOps), std::move(sourceOps)));
+
+    // Find last kernel statement and add the current statement to it
+    auto lastKernelStmtPtr = std::find_if(statements.rbegin(), statements.rend(),
+                                        [](const std::shared_ptr<Statement>& stmt) {
+                                            return dynamic_cast<const KernelDirectStatement*>(stmt.get()) != nullptr;
+                                        });
+
+    KernelDirectStatement* kernelStmtPtr = static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get());
+    // auto kernelStmtPtr = std::make_shared<KernelDirectStatement>(*(static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get())));
+    kernelStmtPtr->AddBodyStatement(std::make_shared<InstrStatement>(label, pred, inst, modifiers, types, std::move(destOps), std::move(sourceOps)));
 
 }
 
-void ParseDirectStatement() {
+// void ParseDirectStatement() {
+
+//     std::string label = "";
+//     std::string type = "";
+//     std::vector<std::string> directives;
+//     std::vector<std::string> arguments;
+//     std::vector<std::unique_ptr<Statement>> incStatements;
+
+//     bool isFunctionEntryDirective = false;
+//     bool isParamDirective = false;
+
+//     while (currentToken != token_semicolon) {
+//         bool isParamDirectiveEnd = false;
+
+//         // Check cases that directive statements end
+//         if(
+//             (isFunctionEntryDirective && currentToken == token_leftparenth) ||
+//             (currentToken == token_newline)
+//         ) {
+//             break;
+//         }
+
+//         switch (currentToken) {
+//             case token_label:
+//                     label = currStrVal;
+//                     break;
+//             case token_direct:
+//                 if (currStrVal == "entry" || currStrVal == "func")
+//                     isFunctionEntryDirective = true;
+//                 else if (currStrVal == "param")
+//                     isParamDirective = true;
+
+//                 directives.push_back(currStrVal);
+
+//                 break;
+//             case token_type:
+//                 type = currStrVal;
+//                 break;
+//             case token_reg:
+//                 arguments.push_back(currStrVal);
+//             case token_number:
+//                 arguments.push_back(std::to_string(currNumVal));
+//             case token_id:
+//                 arguments.push_back(currStrVal);
+
+//                 if (isParamDirective) isParamDirectiveEnd = true;
+
+//                 break;
+//             default:
+//                 break;
+//         }
+
+//         if (isParamDirectiveEnd) break;
+
+//         currentToken = getToken();
+//     }
+
+//     statements.push_back(std::make_unique<DirectStatement>(label, directives, type, arguments, std::move(incStatements)));
+// }
+
+void ParseModuleDirectStatement() {
+
+    std::string directive = currStrVal;
+    getToken();
+    std::string value = "";
+    if (currStrVal != "")
+        value = currStrVal;
+    else value = std::to_string(currNumVal); 
+
+    statements.push_back(std::make_shared<ModuleDirectStatement>(directive, value));
+}
+
+void ParseParamDirectStatement() {
 
     std::string label = "";
     std::string type = "";
-    std::vector<std::string> directives;
-    std::vector<std::string> arguments;
-    std::vector<std::unique_ptr<Statement>> incStatements;
+    std::string name = "";
+    int alignment = 0;
+    int size = 0;
+    int prevToken;
+    bool isArray = false;
 
-    bool isFunctionEntryDirective = false;
-    bool isParamDirective = false;
-
-    while (currentToken != token_semicolon) {
-        bool isParamDirectiveEnd = false;
-
-        // Check cases that directive statements end
-        if(
-            (isFunctionEntryDirective && currentToken == token_leftparenth) ||
-            (currentToken == token_newline)
-        ) {
-            break;
-        }
+    while ((currentToken != token_comma) && (currentToken != token_rightparenth)) {
 
         switch (currentToken) {
             case token_label:
-                    label = currStrVal;
-                    break;
-            case token_direct:
-                if (currStrVal == "entry" || currStrVal == "func")
-                    isFunctionEntryDirective = true;
-                else if (currStrVal == "param")
-                    isParamDirective = true;
-
-                directives.push_back(currStrVal);
-
+                label = currStrVal;
                 break;
             case token_type:
                 type = currStrVal;
                 break;
-            case token_reg:
-                arguments.push_back(currStrVal);
-            case token_number:
-                arguments.push_back(std::to_string(currNumVal));
             case token_id:
-                arguments.push_back(currStrVal);
-
-                if (isParamDirective) isParamDirectiveEnd = true;
-
+                name = currStrVal;
+                break;
+            case token_number:
+                if (prevToken == token_align_dir)
+                    alignment = currNumVal;
+                else if (isArray)
+                    size = currNumVal;
+                break;
+            case token_leftbracket:
+                isArray = true;
+                break;
+            case token_rightbracket:
+                isArray = false;
                 break;
             default:
                 break;
         }
 
-        if (isParamDirectiveEnd) break;
-
+        prevToken = currentToken;
         currentToken = getToken();
     }
 
-    statements.push_back(std::make_unique<DirectStatement>(label, directives, type, arguments, std::move(incStatements)));
+    
+    // Get pointer to the last statement stored, which is an entry directive
+    KernelDirectStatement* stmtPtr = static_cast<KernelDirectStatement*>(statements.back().get());
+    // auto stmtPtr = std::make_shared<KernelDirectStatement>(*(static_cast<KernelDirectStatement*>(statements.back().get())));
+    // Add parameter to last kernel's parameters
+    stmtPtr->AddParameter(std::make_shared<ParamDirectStatement>(label, name, type, alignment, size));
+}
+
+void ParseKernelDirectStatement() {
+    std::string label = "";
+
+    while (currentToken != token_leftcurlybracket) {
+
+        switch (currentToken) {
+            case token_label:
+                label = currStrVal;
+                break;
+            case token_id:
+                // Create kernel statement and add it to statements
+                statements.push_back(std::make_shared<KernelDirectStatement>(label, currStrVal));
+                break;
+            case token_param_dir:
+                ParseParamDirectStatement();
+            default:
+                break;
+        }
+
+        currentToken = getToken();
+    }
 }
 
 void dump_statements() {
@@ -399,8 +497,15 @@ int main() {
     while(currentToken != token_eof) {
         if (isInstrToken(currentToken) || currentToken == token_label || currentToken == token_pred)
             ParseInstrStatement();
-        // else if (currentToken != -1)
-        //     ParseDirectStatement();
+        else if (
+            currentToken == token_version_dir       ||
+            currentToken == token_target_dir        ||
+            currentToken == token_address_size_dir 
+        ) {
+            ParseModuleDirectStatement();
+        }
+        else if (currentToken == token_entry_dir)
+            ParseKernelDirectStatement();
 
         currentToken = getToken();
     }

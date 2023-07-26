@@ -48,22 +48,38 @@ int getToken() {
         // unread the last (invalid) character
         ungetc(currChar, stdin);
 
-        // check for special cases
-        if (currStrVal[0] == '%') {
-            currentToken = token_reg;
-        }
-        else if (isType(currStrVal))
-            currentToken = token_type;
-        else if (currStrVal[0] == '.' && currChar == ' ')
-            currentToken = token_direct;
-        else if (currStrVal[0] == '.') {
-            if (prevToken == token_reg)
-                currentToken = token_dim;
-            else
-                currentToken = token_modifier;
-        }
-        else if (currChar == ':') {
-            currentToken = token_label;
+
+        // check for directives
+        if (currStrVal == ".version")
+            currentToken = token_version_dir;
+        else if (currStrVal == ".target")
+            currentToken = token_target_dir;
+        else if (currStrVal == ".address_size")
+            currentToken = token_address_size_dir;
+        else if (currStrVal == ".entry")
+            currentToken = token_entry_dir;
+        else if (currStrVal == ".param")
+            currentToken = token_param_dir;
+        else if (currStrVal == ".align")
+            currentToken = token_align_dir;
+        else {
+            // check for special cases
+            if (currStrVal[0] == '%') {
+                currentToken = token_reg;
+            }
+            else if (isType(currStrVal))
+                currentToken = token_type;
+            else if (currStrVal[0] == '.' && currChar == ' ')
+                currentToken = token_direct;
+            else if (currStrVal[0] == '.') {
+                if (prevToken == token_reg)
+                    currentToken = token_dim;
+                else
+                    currentToken = token_modifier;
+            }
+            else if (currChar == ':') {
+                currentToken = token_label;
+            }
         }
 
 
