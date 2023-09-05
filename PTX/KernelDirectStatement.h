@@ -29,6 +29,7 @@ public:
 
     KernelDirectStatement(const KernelDirectStatement& stmt);
 
+    std::string getName();
     void AddParameter(std::shared_ptr<ParamDirectStatement> parameter);
     void AddBodyStatement(std::shared_ptr<Statement> statement);
 

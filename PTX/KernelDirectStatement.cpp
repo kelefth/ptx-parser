@@ -21,6 +21,10 @@ KernelDirectStatement::KernelDirectStatement(const KernelDirectStatement& stmt)
     BodyStatements = stmt.BodyStatements;
 }
 
+std::string KernelDirectStatement::getName() {
+    return Name;
+}
+
 void KernelDirectStatement::AddParameter(std::shared_ptr<ParamDirectStatement> parameter) {
     Parameters.push_back(parameter);
 }
