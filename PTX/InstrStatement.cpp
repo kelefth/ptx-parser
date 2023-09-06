@@ -59,6 +59,8 @@ std::vector<std::unique_ptr<Operand>>& InstrStatement::getSourceOps() {
     return SourceOps;
 }
 
+llvm::Value* InstrStatement::ToLlvmIr() {}
+
 void InstrStatement::dump() const {
     const int colWidth = 20;
 

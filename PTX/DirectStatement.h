@@ -4,6 +4,8 @@
 #include <vector>
 #include <memory>
 
+#include "llvm/IR/Value.h"
+
 #include "Statement.h"
 
 class DirectStatement : public Statement {
@@ -18,6 +20,7 @@ public:
 
     std::string getDirective() const;
 
+    llvm::Value* ToLlvmIr();
     void dump() const;
 };
 

@@ -3,6 +3,9 @@
 
 #include <memory>
 
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Function.h"
+
 #include "Statement.h"
 #include "DirectStatement.h"
 #include "ParamDirectStatement.h"
@@ -32,6 +35,8 @@ public:
     std::string getName();
     void AddParameter(std::shared_ptr<ParamDirectStatement> parameter);
     void AddBodyStatement(std::shared_ptr<Statement> statement);
+
+    llvm::Value* ToLlvmIr();
 
     void dump() const;
 };

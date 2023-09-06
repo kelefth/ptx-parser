@@ -24,10 +24,27 @@ ParamDirectStatement::ParamDirectStatement(
     Alignment(alignment),
     Size(size) {}
 
+std::string ParamDirectStatement::getName() {
+    return Name;
+}
+
+std::string ParamDirectStatement::getType() {
+    return Type;
+}
+
+int ParamDirectStatement::getAlignment() {
+    return Alignment;
+}
+
+int ParamDirectStatement::getSize() {
+    return Size;
+}
 
 std::string ParamDirectStatement::ToString() {
     return "";
 }
+
+llvm::Value* ParamDirectStatement::ToLlvmIr() {}
 
 void ParamDirectStatement::dump() const {
     std::cout << getLabel() << " .param "

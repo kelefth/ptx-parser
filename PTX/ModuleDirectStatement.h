@@ -24,6 +24,7 @@ public:
 
     std::string ToString() const;
 
+    llvm::Value* ToLlvmIr();
     void dump() const;
 
 };

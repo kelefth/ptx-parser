@@ -510,5 +510,12 @@ int main() {
         currentToken = getToken();
     }
 
-    dump_statements();
+    PtxToLlvmIrConverter::Initialize();
+
+    for(auto statement : statements) {
+        llvm::Value *value = statement->ToLlvmIr();
+        value->print(llvm::outs(), true);
+    }
+
+    // dump_statements();
 }

@@ -33,6 +33,36 @@ void KernelDirectStatement::AddBodyStatement(std::shared_ptr<Statement> statemen
     BodyStatements.push_back(statement);
 }
 
+llvm::Value* KernelDirectStatement::ToLlvmIr() {
+    
+    llvm::Type *paramType = 
+        PtxToLlvmIrConverter::GetTypeMapping(Parameters[0]->getType())
+        (*PtxToLlvmIrConverter::Context);
+    std::vector<llvm::Type*> params(
+        Parameters.size(),
+        paramType
+    );
+
+    llvm::Type *funcType = llvm::Type::getVoidTy(
+        *PtxToLlvmIrConverter::Context
+    );
+
+    llvm::FunctionType *ft = llvm::FunctionType::get(
+        funcType,
+        params,
+        false
+    );
+
+    llvm::Function *func = llvm::Function::Create(
+        ft,
+        llvm::Function::ExternalLinkage,
+        Name,
+        PtxToLlvmIrConverter::Module.get()
+    );
+
+    return func;
+}
+
 void KernelDirectStatement::dump() const {
     std::cout << "Name: " << Name << std::endl;
     std::cout << "Parameters: " << std::endl;

@@ -5,7 +5,7 @@ LLVM_BIN_PATH 	:= $(LLVM_BUILD_PATH)/bin
 CXX := g++
 CXXFLAGS := -g -std=c++17
 
-LLVM_FLAGS := `$(LLVM_BIN_PATH)/llvm-config --cxxflags --ldflags --libs --system-libs --libs core`
+LLVM_FLAGS := `$(LLVM_BIN_PATH)/llvm-config --cxxflags --ldflags --libs --system-libs --libs core` -frtti
 
 SRC_PTX_DIR := PTX
 SRC_PTX_LEXER_DIR := $(SRC_PTX_DIR)/lexer
@@ -38,31 +38,31 @@ $(BUILDDIR)/PtxToLlvmIrConverter.o: $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.h
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/lexer.o: $(SRC_PTX_LEXER_DIR)/lexer.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_LEXER_DIR)/lexer.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_LEXER_DIR)/lexer.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/parser.o: $(SRC_PTX_PARSER_DIR)/parser.h $(SRC_PTX_LEXER_DIR)/lexer.h $(SRC_PTX_DIR)/InstrStatement.h $(SRC_PTX_DIR)/DirectStatement.h $(SRC_PTX_DIR)/Operand.h $(SRC_PTX_DIR)/AddressExpr.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_PARSER_DIR)/parser.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_PARSER_DIR)/parser.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/InstrStatement.o: $(SRC_PTX_DIR)/InstrStatement.h $(SRC_PTX_DIR)/Statement.h $(SRC_PTX_DIR)/Operand.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/InstrStatement.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/InstrStatement.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/DirectStatement.o: $(SRC_PTX_DIR)/DirectStatement.h $(SRC_PTX_DIR)/Statement.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/DirectStatement.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/DirectStatement.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/ModuleDirectStatement.o: $(SRC_PTX_DIR)/DirectStatement.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/ModuleDirectStatement.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/ModuleDirectStatement.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/ParamDirectStatement.o: $(SRC_PTX_DIR)/DirectStatement.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/ParamDirectStatement.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/ParamDirectStatement.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/KernelDirectStatement.o: $(SRC_PTX_DIR)/Statement.h $(SRC_PTX_DIR)/DirectStatement.h $(SRC_PTX_DIR)/ParamDirectStatement.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/KernelDirectStatement.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/KernelDirectStatement.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/Operand.o: $(SRC_PTX_DIR)/Operand.h $(SRC_PTX_DIR)/AddressExpr.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/Operand.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/Operand.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/AddressExpr.o: $(SRC_PTX_DIR)/AddressExpr.h $(SRC_PTX_DIR)/Operand.h
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/AddressExpr.cpp -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/AddressExpr.cpp $(LLVM_FLAGS) -o $@
 
 clean:
 	rm -rf $(BUILDDIR)

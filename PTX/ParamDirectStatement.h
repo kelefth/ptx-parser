@@ -1,6 +1,7 @@
 #ifndef PARAM_DIRECTSTATEMENT_H
 #define PARAM_DIRECTSTATEMENT_H
 
+#include "../PtxToLlvmIr/PtxToLlvmIrConverter.h"
 #include "DirectStatement.h"
 
 class ParamDirectStatement : public DirectStatement {
@@ -27,7 +28,13 @@ public:
         int size
     );
 
+    std::string getName();
+    std::string getType();
+    int getAlignment();
+    int getSize();
+
     std::string ToString();
+    llvm::Value* ToLlvmIr();
     void dump() const;
 };
 

@@ -6,6 +6,8 @@
 #include <variant>
 #include <memory>
 
+#include "llvm/IR/Value.h"
+
 #include "Statement.h"
 #include "Operand.h"
 
@@ -36,6 +38,7 @@ public:
     // std::string ToString();
     std::vector<std::unique_ptr<Operand>>& getSourceOps();
 
+    llvm::Value* ToLlvmIr();
     void dump() const;
 
 };

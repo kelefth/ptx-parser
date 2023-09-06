@@ -36,4 +36,6 @@ std::string DirectStatement::getDirective() const {
     return Directive;
 }
 
+llvm::Value* DirectStatement::ToLlvmIr() {}
+
 void DirectStatement::dump() const {}
