@@ -1,8 +1,10 @@
 #include <iostream>
 #include <iomanip>
 #include <unistd.h>
+#include <algorithm>
 
 #include "InstrStatement.h"
+#include "../PtxToLlvmIr/PtxToLlvmIrConverter.h"
 #include "Operand.h"
 
 // std::string InstrStatement::ToString() {
@@ -59,7 +61,71 @@ std::vector<std::unique_ptr<Operand>>& InstrStatement::getSourceOps() {
     return SourceOps;
 }
 
-llvm::Value* InstrStatement::ToLlvmIr() {}
+llvm::Value* InstrStatement::ToLlvmIr() {
+    if (Inst == "ld") {
+        // check if it's an ld.param instruction
+        auto modIterator = std::find(
+            Modifiers.begin(),
+            Modifiers.end(),
+            "param"
+        );
+        if (modIterator != Modifiers.end()) {
+            llvm::Function *func =
+                &PtxToLlvmIrConverter::Module->getFunctionList().back();
+
+            // get value of source operand
+            // ld.param's source operand's value is always an AddressExpr
+            auto value = std::get<AddressExpr>(SourceOps[0]->getValue());
+
+            auto args = func->args();
+            for (auto &arg : args) {
+                if (
+                    (arg.getName() == value.getFirstOperand()->ToString()) ||
+                    (arg.getName() == value.getSecondOperand()->ToString())
+                ) {
+                    llvm::Type *argType = arg.getType();
+                    llvm::AllocaInst *alloca =
+                        PtxToLlvmIrConverter::Builder->CreateAlloca(argType);
+                    PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
+                }
+            }
+        }
+    }
+    else if (Inst == "mov") {
+        if (SourceOps[0]->getType() == OperandType::Register) {
+            std::string value = std::get<std::string>(
+                SourceOps[0]->getValue()
+            );
+
+            // check if the source operand is a special register
+            if (value == "%ctaid" || value == "%ntid" || value == "%tid") {
+                // generate call to intrinsic
+                llvm::Type *funcType = PtxToLlvmIrConverter::GetTypeMapping(
+                    Types[0]
+                )(*PtxToLlvmIrConverter::Context);
+
+                llvm::FunctionType *ft = llvm::FunctionType::get(
+                    funcType,
+                    false
+                );
+                std::string funcName = "llvm.nvvm.read.ptx.sreg."
+                                        +value.erase(0,1)+"."
+                                        +SourceOps[0]->getDimension();
+
+                llvm::FunctionCallee func =
+                    PtxToLlvmIrConverter::Module->getOrInsertFunction(funcName, ft);
+                PtxToLlvmIrConverter::Builder->CreateCall(func);
+            }
+        }
+    }
+    // else if (Inst == "mad") {
+    //     llvm::Value *mulRes = PtxToLlvmIrConverter::Builder->CreateMul(
+
+    //     );
+    // }
+
+    return nullptr;
+}
 
 void InstrStatement::dump() const {
     const int colWidth = 20;

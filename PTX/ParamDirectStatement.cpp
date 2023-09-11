@@ -44,7 +44,7 @@ std::string ParamDirectStatement::ToString() {
     return "";
 }
 
-llvm::Value* ParamDirectStatement::ToLlvmIr() {}
+llvm::Value* ParamDirectStatement::ToLlvmIr() { return nullptr; }
 
 void ParamDirectStatement::dump() const {
     std::cout << getLabel() << " .param "

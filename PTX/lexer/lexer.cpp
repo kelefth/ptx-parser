@@ -58,7 +58,7 @@ int getToken() {
             currentToken = token_address_size_dir;
         else if (currStrVal == ".entry")
             currentToken = token_entry_dir;
-        else if (currStrVal == ".param")
+        else if (currStrVal == ".param" && prevToken != token_ld)
             currentToken = token_param_dir;
         else if (currStrVal == ".align")
             currentToken = token_align_dir;

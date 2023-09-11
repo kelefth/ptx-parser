@@ -34,10 +34,19 @@ void KernelDirectStatement::AddBodyStatement(std::shared_ptr<Statement> statemen
 }
 
 llvm::Value* KernelDirectStatement::ToLlvmIr() {
-    
-    llvm::Type *paramType = 
-        PtxToLlvmIrConverter::GetTypeMapping(Parameters[0]->getType())
-        (*PtxToLlvmIrConverter::Context);
+
+    // Create kernel definition
+
+    llvm::Type *paramType;
+
+    if (Parameters[0]->getType() == "u64")
+        paramType = llvm::Type::getInt32PtrTy(*PtxToLlvmIrConverter::Context);
+    else {
+        paramType = PtxToLlvmIrConverter::GetTypeMapping(
+            Parameters[0]->getType()
+        )(*PtxToLlvmIrConverter::Context);
+    }
+
     std::vector<llvm::Type*> params(
         Parameters.size(),
         paramType
@@ -59,6 +68,40 @@ llvm::Value* KernelDirectStatement::ToLlvmIr() {
         Name,
         PtxToLlvmIrConverter::Module.get()
     );
+
+    // Set argument names
+    unsigned int index = 0;
+    for (auto &arg : func->args()) {
+        arg.setName(Parameters[index]->getName());
+        index++;
+    }
+
+    // Create kernel body
+    llvm::BasicBlock *kernelBlock = llvm::BasicBlock::Create(
+        *PtxToLlvmIrConverter::Context, "", func
+    );
+
+    PtxToLlvmIrConverter::Builder->SetInsertPoint(kernelBlock);
+
+    // // Create allocations for parameters
+    // std::vector<llvm::AllocaInst*> paramAllocs;
+    // for (auto param : params) {
+    //     paramAllocs.push_back(
+    //         PtxToLlvmIrConverter::Builder->CreateAlloca(param)
+    //     );
+    // }
+
+    // // Store parameter values in allocated space
+    // for (int i = 0; i < params.size(); ++i) {
+    //     llvm::Value *value = func->getArg(i);
+    //     PtxToLlvmIrConverter::Builder->CreateStore(value, paramAllocs[i]);
+    // }
+
+    // Iterate through the body statements and create
+    // instructions
+    for (auto statement : BodyStatements) {
+        statement->ToLlvmIr();
+    }
 
     return func;
 }

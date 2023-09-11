@@ -198,11 +198,13 @@ void ParseInstrStatement() {
                 case token_pred:
                     pred = currStrVal;
                     break;
-                case token_modifier:                
-                    modifiers.push_back(currStrVal);
+                case token_modifier:
+                    // remove dot
+                    modifiers.push_back(currStrVal.erase(0,1));
                     break;
                 case token_type:
-                    types.push_back(currStrVal);
+                    // remove dot
+                    types.push_back(currStrVal.erase(0,1));
                     break;
                 case token_reg:
                     if (inAddress) {
@@ -428,7 +430,8 @@ void ParseParamDirectStatement() {
                 label = currStrVal;
                 break;
             case token_type:
-                type = currStrVal;
+                // remove dot
+                type = currStrVal.erase(0,1);
                 break;
             case token_id:
                 name = currStrVal;
@@ -514,6 +517,7 @@ int main() {
 
     for(auto statement : statements) {
         llvm::Value *value = statement->ToLlvmIr();
+        if(value == nullptr) continue;
         value->print(llvm::outs(), true);
     }
 

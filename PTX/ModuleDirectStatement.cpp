@@ -18,7 +18,7 @@ std::string ModuleDirectStatement::ToString() const {
     return getLabel() + " " + getDirective() + " " + Value;
 }
 
-llvm::Value* ModuleDirectStatement::ToLlvmIr() {}
+llvm::Value* ModuleDirectStatement::ToLlvmIr() { return nullptr; }
 
 void ModuleDirectStatement::dump() const {
     std::cout << ToString();

@@ -33,7 +33,14 @@ public:
         // std::vector<std::variant<std::string, double>> sourceOps
         std::vector<std::unique_ptr<Operand>> destOps,
         std::vector<std::unique_ptr<Operand>> sourceOps
-    ) : Statement(label), Pred(pred), Inst(inst), Modifiers(modifiers), Types(types), DestOps(std::move(destOps)), SourceOps(std::move(sourceOps)) {}
+    )
+    : Statement(label),
+      Pred(pred),
+      Inst(inst),
+      Modifiers(modifiers),
+      Types(types),
+      DestOps(std::move(destOps)),
+      SourceOps(std::move(sourceOps)) {}
 
     // std::string ToString();
     std::vector<std::unique_ptr<Operand>>& getSourceOps();
