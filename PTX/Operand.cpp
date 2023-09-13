@@ -33,6 +33,12 @@ void Operand::setDimension(std::string dim) {
     Dimension = dim;
 }
 
+bool Operand::operator==(const Operand& op) const {
+    return Value == op.Value  &&
+           Type == op.Type    &&
+           Dimension == op.Dimension;
+}
+
 std::string Operand::ToString() {
     if (const auto strPtr (std::get_if<std::string>(&Value)); strPtr) 
         return *strPtr;

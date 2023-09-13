@@ -7,18 +7,25 @@
 
 class Statement {
 
+    unsigned int Id;
     std::string Label;
 
 public:
-    Statement(std::string label) : Label(label) {}
+    Statement(unsigned int id);
+
+    Statement(unsigned int id, std::string label);
     // virtual ~Statement(){}
 
-    // virtual std::string ToString();
-    std::string getLabel() const { return Label; }
-    void setLabel(const std::string label) { Label = label; }
+    unsigned int getId() const;
 
-    virtual llvm::Value* ToLlvmIr() {}
-    virtual void dump() const {}
+    // virtual std::string ToString();
+    std::string getLabel() const;
+    void setLabel(const std::string label);
+
+    virtual bool operator==(const Statement stmt) const;
+
+    virtual void ToLlvmIr();
+    virtual void dump() const;
 
 };
 

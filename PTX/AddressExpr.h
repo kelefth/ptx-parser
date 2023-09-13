@@ -32,6 +32,8 @@ public:
     void setSecondOperand(std::shared_ptr<Operand> operand);
     std::shared_ptr<Operand> getSecondOperand();
 
+    bool operator==(const AddressExpr& expr) const;
+
     std::string ToString();
 };
 

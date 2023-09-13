@@ -15,6 +15,7 @@ BUILDDIR := build
 
 OBJ_FILES := $(BUILDDIR)/lexer.o \
 			 $(BUILDDIR)/parser.o \
+			 $(BUILDDIR)/Statement.o \
 			 $(BUILDDIR)/InstrStatement.o \
 			 $(BUILDDIR)/DirectStatement.o \
 			 $(BUILDDIR)/Operand.o \
@@ -42,6 +43,9 @@ $(BUILDDIR)/lexer.o: $(SRC_PTX_LEXER_DIR)/lexer.h
 
 $(BUILDDIR)/parser.o: $(SRC_PTX_PARSER_DIR)/parser.h $(SRC_PTX_LEXER_DIR)/lexer.h $(SRC_PTX_DIR)/InstrStatement.h $(SRC_PTX_DIR)/DirectStatement.h $(SRC_PTX_DIR)/Operand.h $(SRC_PTX_DIR)/AddressExpr.h
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_PARSER_DIR)/parser.cpp $(LLVM_FLAGS) -o $@
+
+$(BUILDDIR)/Statement.o: $(SRC_PTX_DIR)/Statement.h
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/Statement.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/InstrStatement.o: $(SRC_PTX_DIR)/InstrStatement.h $(SRC_PTX_DIR)/Statement.h $(SRC_PTX_DIR)/Operand.h
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/InstrStatement.cpp $(LLVM_FLAGS) -o $@

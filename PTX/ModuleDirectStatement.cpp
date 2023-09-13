@@ -3,22 +3,34 @@
 #include "ModuleDirectStatement.h"
 
 ModuleDirectStatement::ModuleDirectStatement(
+    unsigned int id,
     std::string label,
     std::string directive,
     std::string value
-) : DirectStatement(label, directive), Value(value) {}
+) : DirectStatement(id, label, directive), Value(value) {}
 
 
 ModuleDirectStatement::ModuleDirectStatement(
+    unsigned int id,
     std::string directive,
     std::string value
-) : DirectStatement("", directive), Value(value) {}
+) : DirectStatement(id, "", directive), Value(value) {}
+
+bool ModuleDirectStatement::operator==(const Statement stmt)
+const {
+    const ModuleDirectStatement* moduleStmt =
+        dynamic_cast<const ModuleDirectStatement*>(&stmt);
+
+    if (moduleStmt == nullptr) return false;
+
+    return getId() == stmt.getId();
+}
 
 std::string ModuleDirectStatement::ToString() const {
     return getLabel() + " " + getDirective() + " " + Value;
 }
 
-llvm::Value* ModuleDirectStatement::ToLlvmIr() { return nullptr; }
+void ModuleDirectStatement::ToLlvmIr() { }
 
 void ModuleDirectStatement::dump() const {
     std::cout << ToString();

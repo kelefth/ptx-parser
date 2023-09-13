@@ -42,6 +42,12 @@ std::shared_ptr<Operand> AddressExpr::getSecondOperand() {
     return Operand2;
 }
 
+bool AddressExpr::operator==(const AddressExpr& expr) const {
+    return Operation == expr.Operation  &&
+           Operand1 == expr.Operand1    &&
+           Operand2 == expr.Operand2;
+}
+
 std::string AddressExpr::ToString() {
     std::string str = Operand1->ToString();
     if (Operation != "") str += " " + Operation;

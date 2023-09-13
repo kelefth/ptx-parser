@@ -14,6 +14,7 @@ class ParamDirectStatement : public DirectStatement {
 public:
 
     ParamDirectStatement(
+        unsigned int id,
         std::string label,
         std::string name,
         std::string type,
@@ -22,6 +23,7 @@ public:
     );
 
     ParamDirectStatement(
+        unsigned int id,
         std::string name,
         std::string type,
         int alignment,
@@ -33,8 +35,10 @@ public:
     int getAlignment();
     int getSize();
 
+    bool operator==(const Statement stmt) const;
+
     std::string ToString();
-    llvm::Value* ToLlvmIr();
+    void ToLlvmIr();
     void dump() const;
 };
 

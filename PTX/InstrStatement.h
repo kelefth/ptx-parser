@@ -24,6 +24,7 @@ class InstrStatement : public Statement {
 
 public:
     InstrStatement(
+        unsigned int id,
         std::string label,
         std::string pred,
         std::string inst,
@@ -34,7 +35,7 @@ public:
         std::vector<std::unique_ptr<Operand>> destOps,
         std::vector<std::unique_ptr<Operand>> sourceOps
     )
-    : Statement(label),
+    : Statement(id, label),
       Pred(pred),
       Inst(inst),
       Modifiers(modifiers),
@@ -45,7 +46,9 @@ public:
     // std::string ToString();
     std::vector<std::unique_ptr<Operand>>& getSourceOps();
 
-    llvm::Value* ToLlvmIr();
+    bool operator==(const Statement stmt) const;
+
+    void ToLlvmIr();
     void dump() const;
 
 };

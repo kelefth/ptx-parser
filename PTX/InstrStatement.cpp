@@ -3,6 +3,9 @@
 #include <unistd.h>
 #include <algorithm>
 
+// #include "KernelDirectStatement.h"
+
+#include "parser/parser.h"
 #include "InstrStatement.h"
 #include "../PtxToLlvmIr/PtxToLlvmIrConverter.h"
 #include "Operand.h"
@@ -61,7 +64,18 @@ std::vector<std::unique_ptr<Operand>>& InstrStatement::getSourceOps() {
     return SourceOps;
 }
 
-llvm::Value* InstrStatement::ToLlvmIr() {
+bool InstrStatement::operator==(const Statement stmt) const {
+    const InstrStatement* instrStmt =
+        dynamic_cast<const InstrStatement*>(&stmt);
+
+    if (instrStmt == nullptr) return false;
+    
+    return getId() == stmt.getId();
+}
+
+void InstrStatement::ToLlvmIr() {
+    std::vector<llvm::Value*> genLlvmInstructions;
+
     if (Inst == "ld") {
         // check if it's an ld.param instruction
         auto modIterator = std::find(
@@ -86,7 +100,12 @@ llvm::Value* InstrStatement::ToLlvmIr() {
                     llvm::Type *argType = arg.getType();
                     llvm::AllocaInst *alloca =
                         PtxToLlvmIrConverter::Builder->CreateAlloca(argType);
-                    PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
+                    llvm::Value *store =
+                        PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
+
+                    // Store generated instructions
+                    genLlvmInstructions.push_back(alloca);
+                    genLlvmInstructions.push_back(store);
                 }
             }
         }
@@ -114,17 +133,41 @@ llvm::Value* InstrStatement::ToLlvmIr() {
 
                 llvm::FunctionCallee func =
                     PtxToLlvmIrConverter::Module->getOrInsertFunction(funcName, ft);
-                PtxToLlvmIrConverter::Builder->CreateCall(func);
+                llvm::Value *call =
+                    PtxToLlvmIrConverter::Builder->CreateCall(func);
+
+                genLlvmInstructions.push_back(call);
             }
         }
     }
-    // else if (Inst == "mad") {
-    //     llvm::Value *mulRes = PtxToLlvmIrConverter::Builder->CreateMul(
+    else if (Inst == "mad") {
+        // llvm::Value *mul = PtxToLlvmIrConverter::Builder->CreateMul(
+        // );
+    }
 
-    //     );
+    PtxToLlvmIrConverter::setPtxToLlvmMapValue(getId(), genLlvmInstructions);
+
+    // for (auto stmt : statements) {
+
+    //     KernelDirectStatement* kernelstmt;
+    //     if ((kernelstmt = dynamic_cast<KernelDirectStatement*>(stmt.get())) != nullptr)
+    //     {
+    //         for (auto bodystmt : kernelstmt->getBodyStatements()) {
+    //             std::vector<llvm::Value*> kernelvalues = PtxToLlvmIrConverter::getPtxToLlvmMapValue(bodystmt->getId());
+    //             if (kernelvalues.size() > 0) {
+    //                 kernelvalues[0]->print(llvm::outs(), true);
+    //                 std::cout << std::endl;
+    //             }
+    //         }
+    //     }
+
+    //     std::vector<llvm::Value*> values = PtxToLlvmIrConverter::getPtxToLlvmMapValue(stmt->getId());
+    //     if (values.size() > 0) {
+    //         values[0]->print(llvm::outs(), true);
+    //         std::cout << std::endl;
+    //     }
     // }
-
-    return nullptr;
+    
 }
 
 void InstrStatement::dump() const {

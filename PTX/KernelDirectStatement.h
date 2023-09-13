@@ -19,6 +19,7 @@ class KernelDirectStatement : public DirectStatement {
 public:
 
     KernelDirectStatement(
+        unsigned int id,
         std::string label,
         std::string name,
         std::vector<std::shared_ptr<ParamDirectStatement>> parameters,
@@ -26,6 +27,7 @@ public:
     );
 
     KernelDirectStatement(
+        unsigned int id,
         std::string label,
         std::string name
     );
@@ -35,8 +37,11 @@ public:
     std::string getName();
     void AddParameter(std::shared_ptr<ParamDirectStatement> parameter);
     void AddBodyStatement(std::shared_ptr<Statement> statement);
+    std::vector<std::shared_ptr<Statement>> getBodyStatements();
 
-    llvm::Value* ToLlvmIr();
+    bool operator==(const Statement stmt) const;
+
+    void ToLlvmIr();
 
     void dump() const;
 };

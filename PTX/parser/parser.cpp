@@ -13,6 +13,7 @@
 int currentToken;
 // std::vector<std::unique_ptr<Statement>> statements;
 // std::vector<InstrStatement> statements;
+unsigned int IdCounter = 0;
 std::vector<std::shared_ptr<Statement>> statements;
 
 bool isInstrToken(int token) {
@@ -337,7 +338,11 @@ void ParseInstrStatement() {
 
     KernelDirectStatement* kernelStmtPtr = static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get());
     // auto kernelStmtPtr = std::make_shared<KernelDirectStatement>(*(static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get())));
-    kernelStmtPtr->AddBodyStatement(std::make_shared<InstrStatement>(label, pred, inst, modifiers, types, std::move(destOps), std::move(sourceOps)));
+    kernelStmtPtr->AddBodyStatement(
+        std::make_shared<InstrStatement>(
+            IdCounter++, label, pred, inst, modifiers, types, std::move(destOps), std::move(sourceOps)
+        )
+    );
 
 }
 
@@ -410,7 +415,11 @@ void ParseModuleDirectStatement() {
         value = currStrVal;
     else value = std::to_string(currNumVal); 
 
-    statements.push_back(std::make_shared<ModuleDirectStatement>(directive, value));
+    statements.push_back(std::make_shared<ModuleDirectStatement>(
+        IdCounter++,
+        directive,
+        value
+    ));
 }
 
 void ParseParamDirectStatement() {
@@ -458,10 +467,16 @@ void ParseParamDirectStatement() {
 
     
     // Get pointer to the last statement stored, which is an entry directive
-    KernelDirectStatement* stmtPtr = static_cast<KernelDirectStatement*>(statements.back().get());
+    KernelDirectStatement* stmtPtr = static_cast<KernelDirectStatement*>(
+        statements.back().get()
+    );
     // auto stmtPtr = std::make_shared<KernelDirectStatement>(*(static_cast<KernelDirectStatement*>(statements.back().get())));
     // Add parameter to last kernel's parameters
-    stmtPtr->AddParameter(std::make_shared<ParamDirectStatement>(label, name, type, alignment, size));
+    stmtPtr->AddParameter(
+        std::make_shared<ParamDirectStatement>(
+            IdCounter++, label, name, type, alignment, size
+        )
+    );
 }
 
 void ParseKernelDirectStatement() {
@@ -475,7 +490,9 @@ void ParseKernelDirectStatement() {
                 break;
             case token_id:
                 // Create kernel statement and add it to statements
-                statements.push_back(std::make_shared<KernelDirectStatement>(label, currStrVal));
+                statements.push_back(
+                    std::make_shared<KernelDirectStatement>(IdCounter++, label, currStrVal)
+                );
                 break;
             case token_param_dir:
                 ParseParamDirectStatement();
@@ -516,9 +533,8 @@ int main() {
     PtxToLlvmIrConverter::Initialize();
 
     for(auto statement : statements) {
-        llvm::Value *value = statement->ToLlvmIr();
-        if(value == nullptr) continue;
-        value->print(llvm::outs(), true);
+        statement->ToLlvmIr();
+        // value->print(llvm::outs(), true);
     }
 
     // dump_statements();

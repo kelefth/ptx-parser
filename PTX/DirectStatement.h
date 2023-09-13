@@ -14,13 +14,16 @@ class DirectStatement : public Statement {
 
 public:
     DirectStatement(
+        unsigned int id,
         std::string label,
         std::string directive
-    ) : Statement(label), Directive(directive) {}
+    ) : Statement(id, label), Directive(directive) {}
 
     std::string getDirective() const;
 
-    llvm::Value* ToLlvmIr();
+    bool operator==(const Statement stmt) const;
+
+    void ToLlvmIr();
     void dump() const;
 };
 

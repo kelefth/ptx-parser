@@ -3,23 +3,25 @@
 #include "ParamDirectStatement.h"
 
 ParamDirectStatement::ParamDirectStatement(
+    unsigned int id,
     std::string label,
     std::string name,
     std::string type,
     int alignment,
     int size
-) : DirectStatement(label, ".param"),
+) : DirectStatement(id, label, ".param"),
     Name(name),
     Type(type),
     Alignment(alignment),
     Size(size) {}
 
 ParamDirectStatement::ParamDirectStatement(
+    unsigned int id,
     std::string name,
     std::string type,
     int alignment,
     int size
-) : DirectStatement("", ".param"),
+) : DirectStatement(id, "", ".param"),
     Name(name), Type(type),
     Alignment(alignment),
     Size(size) {}
@@ -40,11 +42,20 @@ int ParamDirectStatement::getSize() {
     return Size;
 }
 
+bool ParamDirectStatement::operator==(const Statement stmt) const {
+    const ParamDirectStatement* paramStmt =
+        dynamic_cast<const ParamDirectStatement*>(&stmt);
+
+    if (paramStmt == nullptr) return false;
+
+    return getId() == stmt.getId();
+}
+
 std::string ParamDirectStatement::ToString() {
     return "";
 }
 
-llvm::Value* ParamDirectStatement::ToLlvmIr() { return nullptr; }
+void ParamDirectStatement::ToLlvmIr() { }
 
 void ParamDirectStatement::dump() const {
     std::cout << getLabel() << " .param "

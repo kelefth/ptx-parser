@@ -12,19 +12,23 @@ class ModuleDirectStatement : public DirectStatement {
 public:
 
     ModuleDirectStatement(
+        unsigned int id,
         std::string label,
         std::string directive,
         std::string value
     );
 
     ModuleDirectStatement(
+        unsigned int id,
         std::string directive,
         std::string value
     );
 
+    bool operator==(const Statement stmt) const;
+
     std::string ToString() const;
 
-    llvm::Value* ToLlvmIr();
+    void ToLlvmIr();
     void dump() const;
 
 };

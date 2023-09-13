@@ -36,6 +36,15 @@ std::string DirectStatement::getDirective() const {
     return Directive;
 }
 
-llvm::Value* DirectStatement::ToLlvmIr() { return nullptr; }
+bool DirectStatement::operator==(const Statement stmt) const {
+    const DirectStatement* directStmt =
+        dynamic_cast<const DirectStatement*>(&stmt);
+
+    if (directStmt == nullptr) return false;
+
+    return getId() == stmt.getId();
+}
+
+void DirectStatement::ToLlvmIr() { }
 
 void DirectStatement::dump() const {}

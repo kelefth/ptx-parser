@@ -36,6 +36,8 @@ public:
     std::string getDimension();
     void setDimension(std::string dim);
 
+    bool operator==(const Operand& op) const;
+
     std::string ToString();
 
 };

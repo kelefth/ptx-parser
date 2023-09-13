@@ -17,6 +17,9 @@ const std::map<std::string, typeFunc> PtxToLlvmIrConverter::TypeMap {
     {"pred", llvm::Type::getInt1Ty}
 };
 
+std::unordered_map<int, std::vector<llvm::Value*>>
+PtxToLlvmIrConverter::PtxToLlvmMap;
+
 std::unique_ptr<llvm::LLVMContext> PtxToLlvmIrConverter::Context;
 std::unique_ptr<llvm::IRBuilder<>> PtxToLlvmIrConverter::Builder;
 std::unique_ptr<llvm::Module> PtxToLlvmIrConverter::Module;
@@ -25,6 +28,21 @@ void PtxToLlvmIrConverter::Initialize() {
     Context = std::make_unique<llvm::LLVMContext>();
     Module = std::make_unique<llvm::Module>("LLVM Module", *Context);
     Builder = std::make_unique<llvm::IRBuilder<>>(*Context);
+}
+
+std::vector<llvm::Value*>
+PtxToLlvmIrConverter::getPtxToLlvmMapValue(int stmtId) {
+    return PtxToLlvmMap[stmtId];
+    // auto pos = PtxToLlvmMap.find(stmtId);
+    // if (pos == PtxToLlvmMap.end()) return std::vector<llvm::Value*>();
+    // return pos->second;
+}
+
+void PtxToLlvmIrConverter::setPtxToLlvmMapValue(
+    int stmtId,
+    std::vector<llvm::Value*> val
+) {
+    PtxToLlvmMap[stmtId] = val;
 }
 
 typeFunc PtxToLlvmIrConverter::GetTypeMapping(std::string type) {

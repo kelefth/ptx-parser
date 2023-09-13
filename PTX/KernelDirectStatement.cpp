@@ -3,19 +3,25 @@
 #include "KernelDirectStatement.h"
 
 KernelDirectStatement::KernelDirectStatement(
+    unsigned int id,
     std::string label,
     std::string name,
     std::vector<std::shared_ptr<ParamDirectStatement>> parameters,
     std::vector<std::shared_ptr<Statement>> bodyStatements
-) : DirectStatement(label, ".entry"), Name(name), Parameters(parameters), BodyStatements(bodyStatements) {}
+) : DirectStatement(id, label, ".entry"),
+    Name(name),
+    Parameters(parameters),
+    BodyStatements(bodyStatements) {}
 
 KernelDirectStatement::KernelDirectStatement(
+    unsigned int id,
     std::string label,
     std::string name
-) : DirectStatement(label, ".entry"), Name(name) {}
+) : DirectStatement(id, label, ".entry"),
+    Name(name) {}
 
 KernelDirectStatement::KernelDirectStatement(const KernelDirectStatement& stmt)
-: DirectStatement(stmt.getLabel(), stmt.getDirective()) {
+: DirectStatement(stmt.getId(), stmt.getLabel(), stmt.getDirective()) {
     Name = stmt.Name;
     Parameters = stmt.Parameters;
     BodyStatements = stmt.BodyStatements;
@@ -33,7 +39,22 @@ void KernelDirectStatement::AddBodyStatement(std::shared_ptr<Statement> statemen
     BodyStatements.push_back(statement);
 }
 
-llvm::Value* KernelDirectStatement::ToLlvmIr() {
+std::vector<std::shared_ptr<Statement>>
+KernelDirectStatement::getBodyStatements() {
+    return BodyStatements;
+}
+
+bool KernelDirectStatement::operator==(const Statement stmt)
+const {
+    const KernelDirectStatement* kernelStmt =
+        dynamic_cast<const KernelDirectStatement*>(&stmt);
+
+    if (kernelStmt == nullptr) return false;
+
+    return getId() == stmt.getId();
+}
+
+void KernelDirectStatement::ToLlvmIr() {
 
     // Create kernel definition
 
@@ -103,7 +124,7 @@ llvm::Value* KernelDirectStatement::ToLlvmIr() {
         statement->ToLlvmIr();
     }
 
-    return func;
+    // return func;
 }
 
 void KernelDirectStatement::dump() const {
