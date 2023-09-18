@@ -54,6 +54,8 @@ public:
         std::vector<llvm::Value*> val
     );
 
+    static llvm::ICmpInst::Predicate ConvertPtxToLlvmPred(std::string pred);
+
     // static std::variant<LlvmKernel, LlvmStatement> ConvertToLlvmIr(Statement* stmt);
 
 };

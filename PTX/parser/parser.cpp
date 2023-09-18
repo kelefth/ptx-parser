@@ -338,9 +338,18 @@ void ParseInstrStatement() {
 
     KernelDirectStatement* kernelStmtPtr = static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get());
     // auto kernelStmtPtr = std::make_shared<KernelDirectStatement>(*(static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get())));
+    unsigned int kernelId = kernelStmtPtr->getId();
     kernelStmtPtr->AddBodyStatement(
         std::make_shared<InstrStatement>(
-            IdCounter++, label, pred, inst, modifiers, types, std::move(destOps), std::move(sourceOps)
+            IdCounter++,
+            label,
+            kernelId,
+            pred,
+            inst,
+            modifiers,
+            types,
+            std::move(destOps),
+            std::move(sourceOps)
         )
     );
 
@@ -534,8 +543,9 @@ int main() {
 
     for(auto statement : statements) {
         statement->ToLlvmIr();
-        // value->print(llvm::outs(), true);
     }
+
+    PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
 
     // dump_statements();
 }

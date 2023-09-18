@@ -49,6 +49,25 @@ typeFunc PtxToLlvmIrConverter::GetTypeMapping(std::string type) {
     return TypeMap.at(type);
 }
 
+llvm::ICmpInst::Predicate PtxToLlvmIrConverter::ConvertPtxToLlvmPred(
+    std::string pred
+) {
+    if (pred == "eq")
+        return llvm::CmpInst::ICMP_EQ;
+    else if (pred == "ne")
+        return llvm::CmpInst::ICMP_NE;
+    else if (pred == "ge")
+        return llvm::CmpInst::ICMP_SGE;
+    else if (pred == "le")
+        return llvm::CmpInst::ICMP_SLE;
+    else if (pred == "gt")
+        return llvm::CmpInst::ICMP_SGT;
+    else if (pred == "lt")
+        return llvm::CmpInst::ICMP_SLT;
+
+    return llvm::CmpInst::BAD_ICMP_PREDICATE;
+}
+
 // std::variant<LlvmKernel, LlvmStatement> PtxToLlvmIrConverter::ConvertToLlvmIr(Statement* stmt) {
 
 //     // if (dynamic_cast<KernelDirectStatement*>(stmt) != nullptr) {
