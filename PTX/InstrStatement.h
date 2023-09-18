@@ -10,6 +10,7 @@
 
 #include "Statement.h"
 #include "Operand.h"
+#include "KernelDirectStatement.h"
 
 class InstrStatement : public Statement {
 
@@ -24,6 +25,7 @@ class InstrStatement : public Statement {
     std::vector<std::unique_ptr<Operand>> SourceOps;
 
     llvm::Value* getLlvmOperandValue(std::string ptxOperandName);
+    std::unique_ptr<KernelDirectStatement> GetCurrentKernel();
 
 public:
     InstrStatement(

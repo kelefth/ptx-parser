@@ -8,7 +8,6 @@
 
 #include "parser/parser.h"
 #include "InstrStatement.h"
-#include "KernelDirectStatement.h"
 #include "../PtxToLlvmIr/PtxToLlvmIrConverter.h"
 #include "Operand.h"
 
@@ -103,8 +102,8 @@ bool InstrStatement::operator==(const Statement stmt) const {
     return getId() == stmt.getId();
 }
 
-llvm::Value* InstrStatement::getLlvmOperandValue(std::string ptxOperandName) {
-    // find the kernel that the instruction is in
+// find the kernel that the instruction is in
+std::unique_ptr<KernelDirectStatement> InstrStatement::GetCurrentKernel() {
     std::unique_ptr<KernelDirectStatement> currKernel = nullptr;
     for (const auto stmt : statements) {
         KernelDirectStatement* kernelStatement =
@@ -117,6 +116,11 @@ llvm::Value* InstrStatement::getLlvmOperandValue(std::string ptxOperandName) {
         }
     }
 
+    return currKernel;
+}
+
+llvm::Value* InstrStatement::getLlvmOperandValue(std::string ptxOperandName) {
+    std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
     if (currKernel == nullptr) return nullptr;
 
     // find the last statement before the current
@@ -351,6 +355,41 @@ void InstrStatement::ToLlvmIr() {
 
         genLlvmInstructions.push_back(icmp);
 
+    }
+    else if (Inst == "bra") {
+        // remove @ from pred
+        Pred = Pred.erase(0,1);
+
+        llvm::Value* cond = getLlvmOperandValue(Pred);
+
+        // get name of current kernel, in order to add
+        // the block targets of the branch to this kernel
+        std::unique_ptr currKernel = GetCurrentKernel();
+        std::string currKernelName = currKernel->getName();
+
+        llvm::BasicBlock* falseBlock = llvm::BasicBlock::Create(
+            *PtxToLlvmIrConverter::Context,
+            "",
+            PtxToLlvmIrConverter::Module->getFunction(currKernelName)
+        );
+
+        std::string targetValue = std::get<std::string>(
+            DestOps[0]->getValue()
+        );
+        llvm::BasicBlock* trueBlock = llvm::BasicBlock::Create(
+            *PtxToLlvmIrConverter::Context,
+            targetValue,
+            PtxToLlvmIrConverter::Module->getFunction(currKernelName)
+        );
+
+        // set target as null for now, need to patch it later
+        llvm::Value* br = PtxToLlvmIrConverter::Builder->CreateCondBr(
+            cond,
+            trueBlock,
+            falseBlock
+        );
+
+        genLlvmInstructions.push_back(br);
     }
 
     PtxToLlvmIrConverter::setPtxToLlvmMapValue(getId(), genLlvmInstructions);
