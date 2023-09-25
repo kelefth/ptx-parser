@@ -211,7 +211,7 @@ void ParseInstrStatement() {
                     if (inAddress) {
                         isAlreadyAddress = true;
 
-                        opType = OperandType::Address;
+                        opType = OperandType::Register;
 
                         AddressExpr addressExpr(std::make_shared<Operand>(currStrVal, opType));
 
