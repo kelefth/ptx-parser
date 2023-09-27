@@ -245,56 +245,66 @@ void InstrStatement::ToLlvmIr() {
     std::vector<llvm::Value*> genLlvmInstructions;
 
     // if instruction has a label, change IR insert point
-    // if (getLabel() != "") {
-    //     std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
+    if (getLabel() != "") {
+        std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
 
-    //     int userStmtId = -1;
-    //     for (const auto stmt : currKernel->getBodyStatements()) {
-    //         unsigned int stmtId = stmt->getId();
-    //         if (stmtId < this->getId()) {
-    //             InstrStatement* instrStatement =
-    //                 dynamic_cast<InstrStatement*>(stmt.get());
-    //             if (instrStatement == nullptr)
-    //                 continue;
+        int userStmtId = -1;
+        for (const auto stmt : currKernel->getBodyStatements()) {
+            unsigned int stmtId = stmt->getId();
+            if (stmtId < this->getId()) {
+                InstrStatement* instrStatement =
+                    dynamic_cast<InstrStatement*>(stmt.get());
+                if (instrStatement == nullptr)
+                    continue;
                 
-    //             std::string destOpValue;
-    //             if (instrStatement->getDestOps()[0]) {
-    //                 destOpValue = std::get<std::string>(
-    //                     instrStatement->getDestOps()[0]->getValue()
-    //                 );
-    //             }
+                std::string destOpValue;
+                if (
+                    (!instrStatement->getDestOps().empty()) &&
+                    (instrStatement->getDestOps()[0])
+                ) {
+                    destOpValue = std::get<std::string>(
+                        instrStatement->getDestOps()[0]->getValue()
+                    );
+                }
 
-    //             if (
-    //                 instrStatement->getInst() == "bra" &&
-    //                 destOpValue == getLabel()
-    //             ) {
-    //                 userStmtId = stmtId;
-    //             }
-    //         }
-    //     }
+                if (
+                    instrStatement->getInst() == "bra" &&
+                    destOpValue == getLabel()
+                ) {
+                    userStmtId = stmtId;
+                    break;
+                }
+            }
+        }
 
-    //     if (userStmtId != -1) {
-    //         llvm::Value* llvmStmt =
-    //             PtxToLlvmIrConverter::getPtxToLlvmMapValue(userStmtId)[0];
+        if (userStmtId != -1) {
+            llvm::Value* llvmStmt =
+                PtxToLlvmIrConverter::getPtxToLlvmMapValue(userStmtId)[0];
 
-    //         llvm::Function* currFunc =
-    //             PtxToLlvmIrConverter::Module->getFunction(currKernel->getName());
+            llvm::Instruction* braInst = llvm::cast<llvm::Instruction>(
+                llvmStmt
+            );
 
-    //         llvm::Instruction* instToFind;
-    //         for (auto it = llvm::inst_begin(currFunc), e = llvm::inst_end(currFunc); it != e; ++it) {
-    //             if ((*it) == llvmStmt) {
-    //                 instToFind = *it
-    //             }
+            llvm::BasicBlock* trueBranch = braInst->getSuccessor(0);
+            PtxToLlvmIrConverter::Builder->SetInsertPoint(trueBranch);
 
-    //         }
+            // llvm::Function* currFunc =
+            //     PtxToLlvmIrConverter::Module->getFunction(currKernel->getName());
+
+            // llvm::Instruction* instToFind;
+            // for (auto it = llvm::inst_begin(currFunc), e = llvm::inst_end(currFunc); it != e; ++it) {
+            //     if ((*it).isIdenticalTo(llvmStmt)) {
+            //         instToFind = *it
+            //     }
+            // }
                 
 
-    //         // auto brInst = dynamic_cast<llvm::BranchInst*>(llvmStmt);
-    //         // llvm::BasicBlock* trueBlock = brInst->getSuccesor(0);
-    //         // PtxToLlvmIrConverter::Builder->SetInsertPoint(trueBlock);
-    //     }
+            // auto brInst = dynamic_cast<llvm::BranchInst*>(llvmStmt);
+            // llvm::BasicBlock* trueBlock = brInst->getSuccesor(0);
+            // PtxToLlvmIrConverter::Builder->SetInsertPoint(trueBlock);
+        }
 
-    // }
+    }
 
     if (Inst == "ld") {
         // check if it's an ld.param instruction
@@ -658,6 +668,10 @@ void InstrStatement::ToLlvmIr() {
         PtxToLlvmIrConverter::Builder->SetInsertPoint(falseBlock);
 
         genLlvmInstructions.push_back(br);
+    }
+    else if (Inst == "ret") {
+        llvm::Value* ret = PtxToLlvmIrConverter::Builder->CreateRetVoid();
+        genLlvmInstructions.push_back(ret);
     }
 
     // check if instruction contains .wide modifier
