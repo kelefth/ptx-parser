@@ -341,8 +341,6 @@ void InstrStatement::ToLlvmIr() {
             }
         }
         else {
-            OperandType sourceOpType = SourceOps[0]->getType();
-
             auto sourceOpAddr = std::get<AddressExpr>(SourceOps[0]->getValue());
 
             std::shared_ptr<Operand> addrFirstOp =
@@ -398,6 +396,65 @@ void InstrStatement::ToLlvmIr() {
 
                 genLlvmInstructions.push_back(ld);
             }
+        }
+    }
+    else if (Inst == "st") {
+        auto destOpAddr = std::get<AddressExpr>(DestOps[0]->getValue());
+        std::string sourceOpName = std::get<std::string>(SourceOps[0]->getValue());
+        llvm::Value* sourceOpValue = GetLlvmOperandValue(sourceOpName);
+
+        std::shared_ptr<Operand> addrFirstOp =
+            destOpAddr.getFirstOperand();
+        OperandType addrFirstOpType = addrFirstOp->getType();
+        std::shared_ptr<Operand> addrSecondOp =
+            destOpAddr.getSecondOperand();
+        if (addrFirstOpType == OperandType::Immediate) {
+            llvm::Type *type = llvm::Type::getInt32Ty(
+                *PtxToLlvmIrConverter::Context
+            );
+
+            double addrFirstOpValue = std::get<double>(
+                addrFirstOp->getValue()
+            );
+            llvm::Value* addrFirstOperandValue = llvm::ConstantInt::get(
+                type,
+                addrFirstOpValue,
+                false
+            );
+        }
+        else if (addrFirstOpType == OperandType::Register) {
+            std::string regName = std::get<std::string>(
+                addrFirstOp->getValue()
+            );
+
+            llvm::Value* addrFirstOpValue = GetLlvmOperandValue(regName);
+
+            if (addrSecondOp != nullptr) {
+                OperandType addrSecondOpType = addrSecondOp->getType();
+                // TODO
+                llvm::Type *type = llvm::Type::getInt32Ty(
+                    *PtxToLlvmIrConverter::Context
+                );
+
+                double addrSecondOpValue = std::get<double>(
+                    addrSecondOp->getValue()
+                );
+                llvm::Value* addrSecondOperandValue = llvm::ConstantInt::get(
+                    type,
+                    addrSecondOpValue,
+                    true
+                );
+            }
+
+            llvm::Type* destType = PtxToLlvmIrConverter::GetTypeMapping(
+                Types[0]
+            )(*PtxToLlvmIrConverter::Context);
+            llvm::Value* st = PtxToLlvmIrConverter::Builder->CreateStore(
+                sourceOpValue,
+                addrFirstOpValue
+            );
+
+            genLlvmInstructions.push_back(st);
         }
     }
     else if (Inst == "cvta") {
