@@ -45,6 +45,10 @@ void PtxToLlvmIrConverter::setPtxToLlvmMapValue(
     PtxToLlvmMap[stmtId] = val;
 }
 
+void PtxToLlvmIrConverter::removePtxToLlvmMapValue(int stmtId) {
+    PtxToLlvmMap.erase(stmtId);
+}
+
 typeFunc PtxToLlvmIrConverter::GetTypeMapping(std::string type) {
     return TypeMap.at(type);
 }
@@ -68,11 +72,14 @@ llvm::ICmpInst::Predicate PtxToLlvmIrConverter::ConvertPtxToLlvmPred(
     return llvm::CmpInst::BAD_ICMP_PREDICATE;
 }
 
-// std::variant<LlvmKernel, LlvmStatement> PtxToLlvmIrConverter::ConvertToLlvmIr(Statement* stmt) {
+llvm::BasicBlock* PtxToLlvmIrConverter::GetBasicBlock(
+    llvm::Function* func,
+    std::string name
+ ) {
+    for (llvm::BasicBlock &block : *func) {
+        if (block.getName() == name)
+            return &block;
+    }
 
-//     // if (dynamic_cast<KernelDirectStatement*>(stmt) != nullptr) {
-//     //     LlvmKernel kernel();
-//     // }
-
-//     return LlvmStatement("", LlvmInstruction(""));
-// }
+    return nullptr;
+}

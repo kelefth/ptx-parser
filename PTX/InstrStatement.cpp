@@ -148,7 +148,7 @@ std::shared_ptr<Statement> InstrStatement::GetStatementById(unsigned int id) {
     return nullptr;
 }
 
-llvm::Value* InstrStatement::GetLlvmOperandValue(
+llvm::Value* InstrStatement::GetLlvmRegisterValue(
     std::string ptxOperandName,
     bool isComplex = false
 ) {
@@ -197,7 +197,7 @@ llvm::Value* InstrStatement::GetLlvmOperandValue(
         for (auto &op : userStmtInst->getSourceOps()) {
             if (op->getType() == OperandType::Register) {
                 std::string opName = std::get<std::string>(op->getValue());
-                llvm::Value* value = GetLlvmOperandValue(opName);
+                llvm::Value* value = GetLlvmRegisterValue(opName);
                 return value;
             }
         }
@@ -214,6 +214,26 @@ llvm::Value* InstrStatement::GetLlvmOperandValue(
     }
 
     return instValue;
+}
+
+llvm::Value* InstrStatement::GetLlvmOperandValue(
+    const std::unique_ptr<Operand>& operand
+) {
+    auto operandValue = operand->getValue();
+
+    OperandType operandType = operand->getType();
+
+    llvm::Value* operandLlvmValue = nullptr;
+    if (operandType == OperandType::Register) {
+        std::string regName = std::get<std::string>(operandValue);
+        operandLlvmValue = GetLlvmRegisterValue(regName);
+    }
+    else if (operandType == OperandType::Immediate) {
+        double value = std::get<double>(operandValue);
+        operandLlvmValue = GetImmediateValue(value);
+    }
+
+    return operandLlvmValue;
 }
 
 llvm::Constant* InstrStatement::GetImmediateValue(double value) {
@@ -245,7 +265,8 @@ void InstrStatement::ToLlvmIr() {
     std::vector<llvm::Value*> genLlvmInstructions;
 
     // if instruction has a label, change IR insert point
-    if (getLabel() != "") {
+    std::string label = getLabel();
+    if (label != "") {
         std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
 
         int userStmtId = -1;
@@ -269,7 +290,7 @@ void InstrStatement::ToLlvmIr() {
 
                 if (
                     instrStatement->getInst() == "bra" &&
-                    destOpValue == getLabel()
+                    destOpValue == label
                 ) {
                     userStmtId = stmtId;
                     break;
@@ -277,6 +298,7 @@ void InstrStatement::ToLlvmIr() {
             }
         }
 
+        // if statement found
         if (userStmtId != -1) {
             llvm::Value* llvmStmt =
                 PtxToLlvmIrConverter::getPtxToLlvmMapValue(userStmtId)[0];
@@ -287,21 +309,16 @@ void InstrStatement::ToLlvmIr() {
 
             llvm::BasicBlock* trueBranch = braInst->getSuccessor(0);
             PtxToLlvmIrConverter::Builder->SetInsertPoint(trueBranch);
+        }
+        else {
+            std::string currKernelName = currKernel->getName();
+            llvm::BasicBlock* newblock = llvm::BasicBlock::Create(
+                *PtxToLlvmIrConverter::Context,
+                label,
+                PtxToLlvmIrConverter::Module->getFunction(currKernelName)
+            );
 
-            // llvm::Function* currFunc =
-            //     PtxToLlvmIrConverter::Module->getFunction(currKernel->getName());
-
-            // llvm::Instruction* instToFind;
-            // for (auto it = llvm::inst_begin(currFunc), e = llvm::inst_end(currFunc); it != e; ++it) {
-            //     if ((*it).isIdenticalTo(llvmStmt)) {
-            //         instToFind = *it
-            //     }
-            // }
-                
-
-            // auto brInst = dynamic_cast<llvm::BranchInst*>(llvmStmt);
-            // llvm::BasicBlock* trueBlock = brInst->getSuccesor(0);
-            // PtxToLlvmIrConverter::Builder->SetInsertPoint(trueBlock);
+            PtxToLlvmIrConverter::Builder->SetInsertPoint(newblock);
         }
 
     }
@@ -367,7 +384,7 @@ void InstrStatement::ToLlvmIr() {
                     addrFirstOp->getValue()
                 );
 
-                llvm::Value* addrFirstOpValue = GetLlvmOperandValue(regName);
+                llvm::Value* addrFirstOpValue = GetLlvmRegisterValue(regName);
 
                 if (addrSecondOp != nullptr) {
                     OperandType addrSecondOpType = addrSecondOp->getType();
@@ -401,7 +418,7 @@ void InstrStatement::ToLlvmIr() {
     else if (Inst == "st") {
         auto destOpAddr = std::get<AddressExpr>(DestOps[0]->getValue());
         std::string sourceOpName = std::get<std::string>(SourceOps[0]->getValue());
-        llvm::Value* sourceOpValue = GetLlvmOperandValue(sourceOpName);
+        llvm::Value* sourceOpValue = GetLlvmRegisterValue(sourceOpName);
 
         std::shared_ptr<Operand> addrFirstOp =
             destOpAddr.getFirstOperand();
@@ -427,7 +444,7 @@ void InstrStatement::ToLlvmIr() {
                 addrFirstOp->getValue()
             );
 
-            llvm::Value* addrFirstOpValue = GetLlvmOperandValue(regName);
+            llvm::Value* addrFirstOpValue = GetLlvmRegisterValue(regName);
 
             if (addrSecondOp != nullptr) {
                 OperandType addrSecondOpType = addrSecondOp->getType();
@@ -459,7 +476,7 @@ void InstrStatement::ToLlvmIr() {
     }
     else if (Inst == "cvta") {
         std::string regName = std::get<std::string>(SourceOps[0]->getValue());
-        llvm::Value* op = GetLlvmOperandValue(regName);
+        llvm::Value* op = GetLlvmRegisterValue(regName);
 
         llvm::Value* load = PtxToLlvmIrConverter::Builder->CreateLoad(
             op->getType(),
@@ -545,15 +562,48 @@ void InstrStatement::ToLlvmIr() {
             (isPrevMul && isPrevPrevCvta && cvtaContainsToGlobal) ||
             (isPrevCvta && cvtaContainsToGlobal)
         ) {
+            // remove possible mul instruction before this
+            if (isPrevMul) {
+                std::vector<llvm::Value*> mappedLlvmInsts = 
+                    PtxToLlvmIrConverter::getPtxToLlvmMapValue(
+                        prevStmt->getId()
+                    );
+                llvm::Value* mulValue = mappedLlvmInsts[0];
+                if (mappedLlvmInsts.size() == 1) {
+                    PtxToLlvmIrConverter::removePtxToLlvmMapValue(
+                        prevStmt->getId()
+                    );
+                }
+                llvm::Instruction* mul = llvm::cast<llvm::Instruction>(
+                    mulValue
+                );
+                mul->eraseFromParent();
+                // also remove it from mapped instructions
+                genLlvmInstructions.erase(
+                    std::remove_if(
+                        genLlvmInstructions.begin(),
+                        genLlvmInstructions.end(),
+                        [](llvm::Value* value) {
+                            llvm::Instruction* inst =
+                                llvm::cast<llvm::Instruction>(value);
+
+                            if (inst && (inst->getOpcodeName() == "mul"))
+                                return true;
+                            return false;
+                        }
+                    ),
+                    genLlvmInstructions.end()
+                );
+            }
 
             std::string ptrName = std::get<std::string>(
                 SourceOps[0]->getValue()
             );
-            llvm::Value* ptr = GetLlvmOperandValue(ptrName, true);
+            llvm::Value* ptr = GetLlvmRegisterValue(ptrName, true);
 
             auto indexValue = SourceOps[1]->getValue();
             std::string indexRegName = std::get<std::string>(indexValue);
-            llvm::Value* index = GetLlvmOperandValue(indexRegName, true);
+            llvm::Value* index = GetLlvmRegisterValue(indexRegName, true);
 
             llvm::Type* type = llvm::Type::getInt32Ty(
                 *PtxToLlvmIrConverter::Context
@@ -568,31 +618,8 @@ void InstrStatement::ToLlvmIr() {
             genLlvmInstructions.push_back(gep);
         }
         else {
-            auto firstOpValue = SourceOps[0]->getValue();
-            auto secondOpValue = SourceOps[1]->getValue();
-
-            OperandType firstOpType = SourceOps[0]->getType();
-            OperandType secondOpType = SourceOps[1]->getType();
-
-            llvm::Value* firstOperandValue = nullptr;
-            if (firstOpType == OperandType::Register) {
-                std::string regName = std::get<std::string>(firstOpValue);
-                firstOperandValue = GetLlvmOperandValue(regName);
-            }
-            else if (firstOpType == OperandType::Immediate) {
-                double value = std::get<double>(firstOpValue);
-                firstOperandValue = GetImmediateValue(value);
-            }
-
-            llvm::Value* secondOperandValue = nullptr;
-            if (secondOpType == OperandType::Register) {
-                std::string regName = std::get<std::string>(secondOpValue);
-                secondOperandValue = GetLlvmOperandValue(regName);
-            }
-            else if (secondOpType == OperandType::Immediate) {
-                double value = std::get<double>(secondOpValue);
-                secondOperandValue = GetImmediateValue(value);
-            }
+            llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+            llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
             llvm::Value* add = PtxToLlvmIrConverter::Builder->CreateAdd(
                 firstOperandValue,
@@ -602,27 +629,21 @@ void InstrStatement::ToLlvmIr() {
             genLlvmInstructions.push_back(add);
         }
     }
+    else if (Inst == "mul") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        llvm::Value* mul = PtxToLlvmIrConverter::Builder->CreateMul(
+            firstOperandValue,
+            secondOperandValue
+        );
+
+        genLlvmInstructions.push_back(mul);
+    }
     else if (Inst == "mad") {
-        auto firstOpValue = SourceOps[0]->getValue();
-        auto secondOpValue = SourceOps[1]->getValue();
-        auto thirdOpValue = SourceOps[2]->getValue();
-
-        OperandType firstOpType = SourceOps[0]->getType();
-        OperandType secondOpType = SourceOps[1]->getType();
-        OperandType thirdOpType = SourceOps[2]->getType();
         
-        llvm::Value* firstOperandValue = nullptr;
-        if (firstOpType == OperandType::Register) {
-            // get register's name
-            std::string regName = std::get<std::string>(firstOpValue);
-            firstOperandValue = GetLlvmOperandValue(regName);
-        }
-
-        llvm::Value* secondOperandValue = nullptr;
-        if (secondOpType == OperandType::Register) {
-            std::string regName = std::get<std::string>(secondOpValue);
-            secondOperandValue = GetLlvmOperandValue(regName);
-        }
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
         if (firstOperandValue == nullptr || secondOperandValue == nullptr)
             return;
@@ -632,11 +653,7 @@ void InstrStatement::ToLlvmIr() {
             secondOperandValue
         );
 
-        llvm::Value* thirdOperandValue = nullptr;
-        if (thirdOpType == OperandType::Register) {
-            std::string regName = std::get<std::string>(thirdOpValue);
-            thirdOperandValue = GetLlvmOperandValue(regName);
-        }
+        llvm::Value* thirdOperandValue = GetLlvmOperandValue(SourceOps[2]);
 
         if (thirdOperandValue == nullptr) return;
 
@@ -649,31 +666,8 @@ void InstrStatement::ToLlvmIr() {
         genLlvmInstructions.push_back(add);
     }
     else if (Inst == "setp") {
-        auto firstOpValue = SourceOps[0]->getValue();
-        auto secondOpValue = SourceOps[1]->getValue();
-
-        OperandType firstOpType = SourceOps[0]->getType();
-        OperandType secondOpType = SourceOps[1]->getType();
-
-        llvm::Value* firstOperandValue = nullptr;
-        if (firstOpType == OperandType::Register) {
-            std::string regName = std::get<std::string>(firstOpValue);
-            firstOperandValue = GetLlvmOperandValue(regName);
-        }
-        else if (firstOpType == OperandType::Immediate) {
-            double value = std::get<double>(firstOpValue);
-            firstOperandValue = GetImmediateValue(value);
-        }
-
-        llvm::Value* secondOperandValue = nullptr;
-        if (secondOpType == OperandType::Register) {
-            std::string regName = std::get<std::string>(secondOpValue);
-            secondOperandValue = GetLlvmOperandValue(regName);
-        }
-        else if (secondOpType == OperandType::Immediate) {
-            double value = std::get<double>(secondOpValue);
-            secondOperandValue = GetImmediateValue(value);
-        }
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
         // get comparison operation
         llvm::ICmpInst::Predicate llvmPred =
@@ -693,12 +687,15 @@ void InstrStatement::ToLlvmIr() {
         // remove @ from pred
         Pred = Pred.erase(0,1);
 
-        llvm::Value* cond = GetLlvmOperandValue(Pred);
+        llvm::Value* cond = GetLlvmRegisterValue(Pred);
 
         // get name of current kernel, in order to add
         // the block targets of the branch to this kernel
         std::unique_ptr currKernel = GetCurrentKernel();
         std::string currKernelName = currKernel->getName();
+        llvm::Function* kernelFunc = PtxToLlvmIrConverter::Module->getFunction(
+            currKernelName
+        );
 
         llvm::BasicBlock* falseBlock = llvm::BasicBlock::Create(
             *PtxToLlvmIrConverter::Context,
@@ -709,11 +706,31 @@ void InstrStatement::ToLlvmIr() {
         std::string targetValue = std::get<std::string>(
             DestOps[0]->getValue()
         );
-        llvm::BasicBlock* trueBlock = llvm::BasicBlock::Create(
-            *PtxToLlvmIrConverter::Context,
-            targetValue,
-            PtxToLlvmIrConverter::Module->getFunction(currKernelName)
-        );
+
+        // check if label exists before the current instruction
+        bool labelExistsBeforeInst = false;
+        for (const auto stmt : statements) {
+            if (stmt->getId() >= getId()) break;
+            if (targetValue == stmt->getLabel())
+                labelExistsBeforeInst = true;
+        }
+
+        // if it exists, find the basic block that was created,
+        // when converting that instruction, else create a new one
+        llvm::BasicBlock* trueBlock;
+        if (labelExistsBeforeInst) {
+            trueBlock = PtxToLlvmIrConverter::GetBasicBlock(
+                kernelFunc,
+                targetValue
+            );
+        }
+        else {
+            trueBlock = llvm::BasicBlock::Create(
+                *PtxToLlvmIrConverter::Context,
+                targetValue,
+                kernelFunc
+            );
+        }
 
         // set target as null for now, need to patch it later
         llvm::Value* br = PtxToLlvmIrConverter::Builder->CreateCondBr(
@@ -736,7 +753,7 @@ void InstrStatement::ToLlvmIr() {
     if (wideIter != Modifiers.end()) {
         std::string type = Types[0];
         std::string regName = std::get<std::string>(SourceOps[0]->getValue());
-        llvm::Value* operand = GetLlvmOperandValue(regName);
+        llvm::Value* operand = GetLlvmRegisterValue(regName);
         std::string typeBitsStr = std::regex_replace(
             type,
             std::regex("[a-z]+"),

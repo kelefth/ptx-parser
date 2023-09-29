@@ -53,9 +53,12 @@ public:
         int stmtId,
         std::vector<llvm::Value*> val
     );
+    static void removePtxToLlvmMapValue(int stmtId);
 
     static llvm::ICmpInst::Predicate ConvertPtxToLlvmPred(std::string pred);
-
-    // static std::variant<LlvmKernel, LlvmStatement> ConvertToLlvmIr(Statement* stmt);
+    static llvm::BasicBlock* GetBasicBlock(
+        llvm::Function* func,
+        std::string name
+    );
 
 };

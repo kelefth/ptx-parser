@@ -30,10 +30,12 @@ class InstrStatement : public Statement {
     // of the last instruction that used it as destination.
     // isComplex is used when the PTX instructions don't
     // have a direct mapping to LLVM instructions.
-    llvm::Value* GetLlvmOperandValue(
+    llvm::Value* GetLlvmRegisterValue(
         std::string ptxOperandName,
         bool isComplex
     );
+
+    llvm::Value* GetLlvmOperandValue(const std::unique_ptr<Operand>& operand);
 
     llvm::Constant* GetImmediateValue(double value);
 
