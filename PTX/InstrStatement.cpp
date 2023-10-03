@@ -205,7 +205,7 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(
 
     // get the value of the last of the generated llvm instructions
     // that returns a value
-    llvm::Value* instValue;
+    llvm::Value* instValue = nullptr;
     for (auto it = llvmStmts.rbegin(); it != llvmStmts.rend(); ++it) {
         if ((*it)->getType()->getTypeID() != llvm::Type::VoidTyID) {
             instValue = *it;
@@ -621,6 +621,9 @@ void InstrStatement::ToLlvmIr() {
             llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
             llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
+            if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+                return;
+
             llvm::Value* add = PtxToLlvmIrConverter::Builder->CreateAdd(
                 firstOperandValue,
                 secondOperandValue
@@ -633,12 +636,29 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
         llvm::Value* mul = PtxToLlvmIrConverter::Builder->CreateMul(
             firstOperandValue,
             secondOperandValue
         );
 
         genLlvmInstructions.push_back(mul);
+    }
+    else if (Inst == "shl") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
+        llvm::Value* shl = PtxToLlvmIrConverter::Builder->CreateShl(
+            firstOperandValue,
+            secondOperandValue
+        );
+
+        genLlvmInstructions.push_back(shl);
     }
     else if (Inst == "mad") {
         
@@ -668,6 +688,9 @@ void InstrStatement::ToLlvmIr() {
     else if (Inst == "setp") {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
 
         // get comparison operation
         llvm::ICmpInst::Predicate llvmPred =
