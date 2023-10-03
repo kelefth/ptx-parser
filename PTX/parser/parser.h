@@ -16,6 +16,10 @@ bool isInstrToken(int token);
 
 void ParseInstrStatement();
 void ParseDirectStatement();
+void ParseModuleDirectStatement();
+void ParseLinkingDirectStatemnt();
+void ParseParamDirectStatement();
+void ParseKernelDirectStatement();
 
 
 #endif

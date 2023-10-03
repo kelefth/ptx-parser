@@ -62,6 +62,20 @@ int getToken() {
             currentToken = token_param_dir;
         else if (currStrVal == ".align")
             currentToken = token_align_dir;
+        else if (currStrVal == ".weak")
+            currentToken = token_weak_dir;
+        else if (currStrVal == ".extern")
+            currentToken = token_extern_dir;
+        else if (currStrVal == ".visible")
+            currentToken = token_visible_dir;
+        else if (currStrVal == ".common")
+            currentToken = token_common_dir;
+        else if (currStrVal == ".global")
+            currentToken = token_global_dir;
+        else if (currStrVal == ".shared")
+            currentToken = token_shared_dir;
+        else if (currStrVal == ".local")
+            currentToken = token_local_dir;
         else {
             // check for special cases
             if (currStrVal[0] == '%') {

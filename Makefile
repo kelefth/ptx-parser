@@ -21,6 +21,7 @@ OBJ_FILES := $(BUILDDIR)/lexer.o \
 			 $(BUILDDIR)/Operand.o \
 			 $(BUILDDIR)/AddressExpr.o \
 			 $(BUILDDIR)/ModuleDirectStatement.o \
+			 $(BUILDDIR)/LinkingDirectStatement.o \
 			 $(BUILDDIR)/ParamDirectStatement.o \
 			 $(BUILDDIR)/KernelDirectStatement.o \
 			 $(BUILDDIR)/PtxToLlvmIrConverter.o
@@ -55,6 +56,9 @@ $(BUILDDIR)/DirectStatement.o: $(SRC_PTX_DIR)/DirectStatement.h $(SRC_PTX_DIR)/S
 
 $(BUILDDIR)/ModuleDirectStatement.o: $(SRC_PTX_DIR)/DirectStatement.h
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/ModuleDirectStatement.cpp $(LLVM_FLAGS) -o $@
+
+$(BUILDDIR)/LinkingDirectStatement.o: $(SRC_PTX_DIR)/DirectStatement.h
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/LinkingDirectStatement.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/ParamDirectStatement.o: $(SRC_PTX_DIR)/DirectStatement.h
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/ParamDirectStatement.cpp $(LLVM_FLAGS) -o $@

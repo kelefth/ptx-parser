@@ -51,7 +51,14 @@ enum Token {
     token_address_size_dir,
     token_param_dir,
     token_entry_dir,
-    token_align_dir
+    token_align_dir,
+    token_weak_dir,
+    token_extern_dir,
+    token_visible_dir,
+    token_common_dir,
+    token_global_dir,
+    token_shared_dir,
+    token_local_dir
 };
 
 extern int currentToken;

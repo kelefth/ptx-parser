@@ -8,6 +8,7 @@
 #include "../ModuleDirectStatement.h"
 #include "../ParamDirectStatement.h"
 #include "../KernelDirectStatement.h"
+#include "../LinkingDirectStatement.h"
 #include "../Operand.h"
 
 int currentToken;
@@ -431,6 +432,72 @@ void ParseModuleDirectStatement() {
     ));
 }
 
+void ParseLinkingDirectStatemnt() {
+    int prevToken;
+    std::string directive = "";
+    std::string addressSpace = "";
+    std::string identifier = "";
+    std::string type = "";
+    std::string label = "";
+    int alignment = 0;
+    int size = 0;
+    bool isArray = false;
+
+    while (currentToken != token_semicolon) {
+        switch (currentToken) {
+            case token_label:
+                label = currStrVal;
+                break;
+            case token_weak_dir:
+            case token_extern_dir:
+            case token_visible_dir:
+            case token_common_dir:
+                directive = currStrVal;
+                break;
+            case token_global_dir:
+            case token_shared_dir:
+            case token_local_dir:
+                addressSpace = currStrVal;
+                break;
+            case token_type:
+                type = currStrVal;
+                break;
+            case token_id:
+                identifier = currStrVal;
+                break;
+            case token_number:
+                if (prevToken == token_align_dir)
+                    alignment = currNumVal;
+                else if (isArray)
+                    size = currNumVal;
+            case token_leftbracket:
+                isArray = true;
+                break;
+            case token_rightbracket:
+                isArray = false;
+                break;
+            default:
+                break;
+        }
+
+        prevToken = currentToken;
+        currentToken = getToken();
+    }
+
+    statements.push_back(
+        std::make_shared<LinkingDirectStatement>(
+            IdCounter++,
+            label,
+            directive,
+            addressSpace,
+            alignment,
+            type,
+            identifier,
+            size
+        )
+    );
+}
+
 void ParseParamDirectStatement() {
 
     std::string label = "";
@@ -535,17 +602,25 @@ int main() {
         }
         else if (currentToken == token_entry_dir)
             ParseKernelDirectStatement();
+        else if (
+            currentToken == token_weak_dir      ||
+            currentToken == token_extern_dir    ||
+            currentToken == token_visible_dir   ||
+            currentToken == token_common_dir
+        ) {
+            ParseLinkingDirectStatemnt();
+        }
 
         currentToken = getToken();
     }
 
-    PtxToLlvmIrConverter::Initialize();
+    // PtxToLlvmIrConverter::Initialize();
 
-    for(auto statement : statements) {
-        statement->ToLlvmIr();
-    }
+    // for(auto statement : statements) {
+    //     statement->ToLlvmIr();
+    // }
 
-    PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+    // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
 
-    // dump_statements();
+    dump_statements();
 }
