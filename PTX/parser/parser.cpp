@@ -605,7 +605,6 @@ int main() {
         else if (
             currentToken == token_weak_dir      ||
             currentToken == token_extern_dir    ||
-            currentToken == token_visible_dir   ||
             currentToken == token_common_dir
         ) {
             ParseLinkingDirectStatemnt();
@@ -614,13 +613,13 @@ int main() {
         currentToken = getToken();
     }
 
-    // PtxToLlvmIrConverter::Initialize();
+    PtxToLlvmIrConverter::Initialize();
 
-    // for(auto statement : statements) {
-    //     statement->ToLlvmIr();
-    // }
+    for(auto statement : statements) {
+        statement->ToLlvmIr();
+    }
 
-    // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+    PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
 
     dump_statements();
 }
