@@ -521,103 +521,103 @@ void InstrStatement::ToLlvmIr() {
             currKernel->getBodyStatements();
 
         // check previous instructions for patterns
-        unsigned int currInstIndex = 0;
-        for (auto stmt : currKernelStatements) {
-            if (stmt->getId() == getId())
-                break;
-            currInstIndex++;
-        }
+        // unsigned int currInstIndex = 0;
+        // for (auto stmt : currKernelStatements) {
+        //     if (stmt->getId() == getId())
+        //         break;
+        //     currInstIndex++;
+        // }
 
-        const InstrStatement* prevStmt =
-            dynamic_cast<const InstrStatement*>(
-                currKernelStatements[currInstIndex-1].get()
-            );
+        // const InstrStatement* prevStmt =
+        //     dynamic_cast<const InstrStatement*>(
+        //         currKernelStatements[currInstIndex-1].get()
+        //     );
 
-        const InstrStatement* prevPrevStmt =
-            dynamic_cast<const InstrStatement*>(
-                currKernelStatements[currInstIndex-2].get()
-            );
+        // const InstrStatement* prevPrevStmt =
+        //     dynamic_cast<const InstrStatement*>(
+        //         currKernelStatements[currInstIndex-2].get()
+        //     );
 
-        bool isPrevMul = prevStmt && prevStmt->getInst() == "mul";
-        bool isPrevCvta = prevStmt && prevStmt->getInst() == "cvta";
-        bool isPrevPrevCvta = prevPrevStmt && prevPrevStmt->getInst() == "cvta";
-        bool cvtaContainsToGlobal = false;
+        // bool isPrevMul = prevStmt && prevStmt->getInst() == "mul";
+        // bool isPrevCvta = prevStmt && prevStmt->getInst() == "cvta";
+        // bool isPrevPrevCvta = prevPrevStmt && prevPrevStmt->getInst() == "cvta";
+        // bool cvtaContainsToGlobal = false;
 
-        std::vector<std::string> cvtaStmtMods;
-        if (isPrevPrevCvta)
-            cvtaStmtMods = prevPrevStmt->getModifiers();
-        else if (isPrevCvta)
-            cvtaStmtMods = prevStmt->getModifiers();
+        // std::vector<std::string> cvtaStmtMods;
+        // if (isPrevPrevCvta)
+        //     cvtaStmtMods = prevPrevStmt->getModifiers();
+        // else if (isPrevCvta)
+        //     cvtaStmtMods = prevStmt->getModifiers();
 
-        if (isPrevPrevCvta || isPrevCvta) {
-            cvtaContainsToGlobal = std::find(
-                cvtaStmtMods.begin(),
-                cvtaStmtMods.end(),
-                "to.global"
-            ) != cvtaStmtMods.end();
-        }
+        // if (isPrevPrevCvta || isPrevCvta) {
+        //     cvtaContainsToGlobal = std::find(
+        //         cvtaStmtMods.begin(),
+        //         cvtaStmtMods.end(),
+        //         "to.global"
+        //     ) != cvtaStmtMods.end();
+        // }
 
-        // check for getelementptr pattern
-        if (
-            (isPrevMul && isPrevPrevCvta && cvtaContainsToGlobal) ||
-            (isPrevCvta && cvtaContainsToGlobal)
-        ) {
-            // remove possible mul instruction before this
-            if (isPrevMul) {
-                std::vector<llvm::Value*> mappedLlvmInsts = 
-                    PtxToLlvmIrConverter::getPtxToLlvmMapValue(
-                        prevStmt->getId()
-                    );
-                llvm::Value* mulValue = mappedLlvmInsts[0];
-                if (mappedLlvmInsts.size() == 1) {
-                    PtxToLlvmIrConverter::removePtxToLlvmMapValue(
-                        prevStmt->getId()
-                    );
-                }
-                llvm::Instruction* mul = llvm::cast<llvm::Instruction>(
-                    mulValue
-                );
-                mul->eraseFromParent();
-                // also remove it from mapped instructions
-                genLlvmInstructions.erase(
-                    std::remove_if(
-                        genLlvmInstructions.begin(),
-                        genLlvmInstructions.end(),
-                        [](llvm::Value* value) {
-                            llvm::Instruction* inst =
-                                llvm::cast<llvm::Instruction>(value);
+        // // check for getelementptr pattern
+        // if (
+        //     (isPrevMul && isPrevPrevCvta && cvtaContainsToGlobal) ||
+        //     (isPrevCvta && cvtaContainsToGlobal)
+        // ) {
+        //     // remove possible mul instruction before this
+        //     if (isPrevMul) {
+        //         std::vector<llvm::Value*> mappedLlvmInsts = 
+        //             PtxToLlvmIrConverter::getPtxToLlvmMapValue(
+        //                 prevStmt->getId()
+        //             );
+        //         llvm::Value* mulValue = mappedLlvmInsts[0];
+        //         if (mappedLlvmInsts.size() == 1) {
+        //             PtxToLlvmIrConverter::removePtxToLlvmMapValue(
+        //                 prevStmt->getId()
+        //             );
+        //         }
+        //         llvm::Instruction* mul = llvm::cast<llvm::Instruction>(
+        //             mulValue
+        //         );
+        //         mul->eraseFromParent();
+        //         // also remove it from mapped instructions
+        //         genLlvmInstructions.erase(
+        //             std::remove_if(
+        //                 genLlvmInstructions.begin(),
+        //                 genLlvmInstructions.end(),
+        //                 [](llvm::Value* value) {
+        //                     llvm::Instruction* inst =
+        //                         llvm::cast<llvm::Instruction>(value);
 
-                            if (inst && (inst->getOpcodeName() == "mul"))
-                                return true;
-                            return false;
-                        }
-                    ),
-                    genLlvmInstructions.end()
-                );
-            }
+        //                     if (inst && (inst->getOpcodeName() == "mul"))
+        //                         return true;
+        //                     return false;
+        //                 }
+        //             ),
+        //             genLlvmInstructions.end()
+        //         );
+        //     }
 
-            std::string ptrName = std::get<std::string>(
-                SourceOps[0]->getValue()
-            );
-            llvm::Value* ptr = GetLlvmRegisterValue(ptrName, true);
+        //     std::string ptrName = std::get<std::string>(
+        //         SourceOps[0]->getValue()
+        //     );
+        //     llvm::Value* ptr = GetLlvmRegisterValue(ptrName, true);
 
-            auto indexValue = SourceOps[1]->getValue();
-            std::string indexRegName = std::get<std::string>(indexValue);
-            llvm::Value* index = GetLlvmRegisterValue(indexRegName, true);
+        //     auto indexValue = SourceOps[1]->getValue();
+        //     std::string indexRegName = std::get<std::string>(indexValue);
+        //     llvm::Value* index = GetLlvmRegisterValue(indexRegName, true);
 
-            llvm::Type* type = llvm::Type::getInt32Ty(
-                *PtxToLlvmIrConverter::Context
-            );
-            llvm::Value* indexList[] = { index };
-            llvm::Value* gep = PtxToLlvmIrConverter::Builder->CreateInBoundsGEP(
-                type,
-                ptr,
-                llvm::ArrayRef<llvm::Value*>(indexList, 1)
-            );
+        //     llvm::Type* type = llvm::Type::getInt32Ty(
+        //         *PtxToLlvmIrConverter::Context
+        //     );
+        //     llvm::Value* indexList[] = { index };
+        //     llvm::Value* gep = PtxToLlvmIrConverter::Builder->CreateInBoundsGEP(
+        //         type,
+        //         ptr,
+        //         llvm::ArrayRef<llvm::Value*>(indexList, 1)
+        //     );
 
-            genLlvmInstructions.push_back(gep);
-        }
-        else {
+        //     genLlvmInstructions.push_back(gep);
+        // }
+        // else {
             llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
             llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
@@ -630,7 +630,7 @@ void InstrStatement::ToLlvmIr() {
             );
 
             genLlvmInstructions.push_back(add);
-        }
+        // }
     }
     else if (Inst == "mul") {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
@@ -775,8 +775,8 @@ void InstrStatement::ToLlvmIr() {
     auto wideIter = std::find(Modifiers.begin(), Modifiers.end(), "wide");
     if (wideIter != Modifiers.end()) {
         std::string type = Types[0];
-        std::string regName = std::get<std::string>(SourceOps[0]->getValue());
-        llvm::Value* operand = GetLlvmRegisterValue(regName);
+        // std::string regName = std::get<std::string>(SourceOps[0]->getValue());
+        // llvm::Value* operand = GetLlvmRegisterValue(regName);
         std::string typeBitsStr = std::regex_replace(
             type,
             std::regex("[a-z]+"),
@@ -788,17 +788,18 @@ void InstrStatement::ToLlvmIr() {
             extTypeStr
         )(*PtxToLlvmIrConverter::Context);
 
+        llvm::Value* lastInst = genLlvmInstructions.back();
         // if instruction type is signed, create sext
         llvm::Value* ext;
         if (type[0] == 's') {
             ext = PtxToLlvmIrConverter::Builder->CreateSExt(
-                operand,
+                lastInst,
                 extType
             );
         }
         else {
             ext = PtxToLlvmIrConverter::Builder->CreateZExt(
-                operand,
+                lastInst,
                 extType
             );
         }
