@@ -61,4 +61,6 @@ public:
         std::string name
     );
 
+    static uint ConvertPtxToLlvmAddrSpace(std::string addressSpace);
+
 };

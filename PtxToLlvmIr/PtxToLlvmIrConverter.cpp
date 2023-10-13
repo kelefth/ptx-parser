@@ -87,3 +87,11 @@ llvm::BasicBlock* PtxToLlvmIrConverter::GetBasicBlock(
 
     return nullptr;
 }
+
+uint PtxToLlvmIrConverter::ConvertPtxToLlvmAddrSpace(std::string addressSpace) {
+    if (addressSpace == "global") return 1;
+    else if (addressSpace == "shared") return 3;
+    else if (addressSpace == "local") return 5;
+
+    return 0;
+}
