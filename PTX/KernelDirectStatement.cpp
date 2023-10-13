@@ -58,20 +58,21 @@ void KernelDirectStatement::ToLlvmIr() {
 
     // Create kernel definition
 
-    llvm::Type *paramType;
+    std::vector<llvm::Type*> params;
 
-    if (Parameters[0]->getType() == "u64")
-        paramType = llvm::Type::getInt32PtrTy(*PtxToLlvmIrConverter::Context);
-    else {
-        paramType = PtxToLlvmIrConverter::GetTypeMapping(
-            Parameters[0]->getType()
-        )(*PtxToLlvmIrConverter::Context);
+    for (auto param : Parameters) {
+        llvm::Type *paramType;
+        if (param->getType() == "u64")
+            paramType = llvm::Type::getInt32PtrTy(
+                *PtxToLlvmIrConverter::Context
+            );
+        else {
+            paramType = PtxToLlvmIrConverter::GetTypeMapping(
+                param->getType()
+            )(*PtxToLlvmIrConverter::Context);
+        }
+        params.push_back(paramType);
     }
-
-    std::vector<llvm::Type*> params(
-        Parameters.size(),
-        paramType
-    );
 
     llvm::Type *funcType = llvm::Type::getVoidTy(
         *PtxToLlvmIrConverter::Context
