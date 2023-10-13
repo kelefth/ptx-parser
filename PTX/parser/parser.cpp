@@ -212,7 +212,7 @@ void ParseInstrStatement() {
                     if (inAddress) {
                         isAlreadyAddress = true;
 
-                        opType = OperandType::Register;
+                        opType = OperandType::Address;
 
                         AddressExpr addressExpr(std::make_shared<Operand>(currStrVal, opType));
 
@@ -457,7 +457,7 @@ void ParseLinkingDirectStatemnt() {
             case token_global_dir:
             case token_shared_dir:
             case token_local_dir:
-                addressSpace = currStrVal;
+                addressSpace = currStrVal.erase(0,1);
                 break;
             case token_type:
                 type = currStrVal;
