@@ -26,6 +26,13 @@ public:
         int size
     );
 
+    std::string getAddressSpace();
+    int getAlignment();
+    std::string getType();
+    std::string getIdentifier();
+    int getSize();
+
+    // void ToLlvmIr();
     void dump() const;
 };
 

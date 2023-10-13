@@ -18,6 +18,30 @@ LinkingDirectStatement::LinkingDirectStatement(
     Identifier(identifier),
     Size(size) {}
 
+std::string LinkingDirectStatement::getAddressSpace() {
+    return AddressSpace;
+}
+
+int LinkingDirectStatement::getAlignment() {
+    return Alignment;
+}
+
+std::string LinkingDirectStatement::getType() {
+    return Type;
+}
+
+std::string LinkingDirectStatement::getIdentifier() {
+    return Identifier;
+}
+
+int LinkingDirectStatement::getSize() {
+    return Size;
+}
+
+// void LinkingDirectStatement::ToLlvmIr() {
+
+// }
+
 void LinkingDirectStatement::dump() const {
     if (getLabel() != "")
         std::cout << "Label: " << getDirective() << " ";
