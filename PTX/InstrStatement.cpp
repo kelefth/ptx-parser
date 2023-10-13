@@ -10,6 +10,7 @@
 #include "InstrStatement.h"
 #include "../PtxToLlvmIr/PtxToLlvmIrConverter.h"
 #include "Operand.h"
+#include "LinkingDirectStatement.h"
 
 #include "llvm/IR/InstIterator.h"
 
@@ -160,21 +161,21 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(
     int userStmtId = -1;
     for (const auto stmt : currKernel->getBodyStatements()) {
         unsigned int stmtId = stmt->getId();
-        if (stmtId < this->getId()) {
-            InstrStatement* instrStatement =
-                dynamic_cast<InstrStatement*>(stmt.get());
-            if (instrStatement == nullptr)
-                continue;
-            for (const auto &destOp : instrStatement->getDestOps()) {
-                if (destOp->getType() == OperandType::Register) {
-                    std::string destOpValue = std::get<std::string>(
-                        destOp->getValue()
-                    );
+        if (stmtId >= this->getId()) break;
+        InstrStatement* instrStatement =
+            dynamic_cast<InstrStatement*>(stmt.get());
+        if (instrStatement == nullptr)
+            continue;
+        for (const auto &destOp : instrStatement->getDestOps()) {
 
-                    if (destOpValue == ptxOperandName) {
-                        userStmtId = stmtId;
-                        break;
-                    }
+            if (destOp->getType() == OperandType::Register) {
+                std::string destOpValue = std::get<std::string>(
+                    destOp->getValue()
+                );
+
+                if (destOpValue == ptxOperandName) {
+                    userStmtId = stmtId;
+                    break;
                 }
             }
         }
@@ -197,7 +198,7 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(
         for (auto &op : userStmtInst->getSourceOps()) {
             if (op->getType() == OperandType::Register) {
                 std::string opName = std::get<std::string>(op->getValue());
-                llvm::Value* value = GetLlvmRegisterValue(opName);
+                llvm::Value* value = GetLlvmRegisterValue(opName, true);
                 return value;
             }
         }
@@ -281,7 +282,8 @@ void InstrStatement::ToLlvmIr() {
                 std::string destOpValue;
                 if (
                     (!instrStatement->getDestOps().empty()) &&
-                    (instrStatement->getDestOps()[0])
+                    (instrStatement->getDestOps()[0])       &&
+                    (instrStatement->getDestOps()[0]->getType() == OperandType::Label)
                 ) {
                     destOpValue = std::get<std::string>(
                         instrStatement->getDestOps()[0]->getValue()
@@ -348,12 +350,12 @@ void InstrStatement::ToLlvmIr() {
                     llvm::Type *argType = arg.getType();
                     llvm::AllocaInst *alloca =
                         PtxToLlvmIrConverter::Builder->CreateAlloca(argType);
-                    llvm::Value *store =
-                        PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
+                    // llvm::Value *store =
+                    //     PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
 
                     // Store generated instructions
                     genLlvmInstructions.push_back(alloca);
-                    genLlvmInstructions.push_back(store);
+                    // genLlvmInstructions.push_back(store);
                 }
             }
         }
@@ -418,7 +420,7 @@ void InstrStatement::ToLlvmIr() {
     else if (Inst == "st") {
         auto destOpAddr = std::get<AddressExpr>(DestOps[0]->getValue());
         std::string sourceOpName = std::get<std::string>(SourceOps[0]->getValue());
-        llvm::Value* sourceOpValue = GetLlvmRegisterValue(sourceOpName);
+        llvm::Value* sourceOpValue = GetLlvmRegisterValue(sourceOpName, true);
 
         std::shared_ptr<Operand> addrFirstOp =
             destOpAddr.getFirstOperand();
@@ -444,46 +446,93 @@ void InstrStatement::ToLlvmIr() {
                 addrFirstOp->getValue()
             );
 
-            llvm::Value* addrFirstOpValue = GetLlvmRegisterValue(regName);
+            llvm::Value* addrFirstOpValue;
+            llvm::Value* exprValue;
 
-            if (addrSecondOp != nullptr) {
-                OperandType addrSecondOpType = addrSecondOp->getType();
-                // TODO
-                llvm::Type *type = llvm::Type::getInt32Ty(
-                    *PtxToLlvmIrConverter::Context
-                );
+            if (regName == STACK_POINTER) {
+                llvm::Function *func =
+                    &PtxToLlvmIrConverter::Module->getFunctionList().back();
 
-                double addrSecondOpValue = std::get<double>(
-                    addrSecondOp->getValue()
-                );
-                llvm::Value* addrSecondOperandValue = llvm::ConstantInt::get(
-                    type,
-                    addrSecondOpValue,
-                    true
-                );
+                uint paramIndex;
+                if (addrSecondOp == nullptr) {
+                    paramIndex = 0;
+                }
+                else {
+
+                    double addrSecondOpValue = std::get<double>(
+                        addrSecondOp->getValue()
+                    );
+
+                    uint offset = addrSecondOpValue;
+                    uint currOffset = 0;
+                    paramIndex = 0;
+                    auto args = func->args();
+                    for (auto &arg : args) {
+                        if (currOffset == offset) break;
+                        
+                        llvm::Type *argType = arg.getType();
+                        llvm::TypeSize typeSize =
+                            PtxToLlvmIrConverter::Module->getDataLayout().getTypeAllocSizeInBits(argType);
+                        uint64_t typeSizeInt = typeSize.getFixedSize() / 8;
+
+                        currOffset += typeSizeInt;
+                        paramIndex++;
+                    }
+                }
+
+                // find alloca of the parameter in index paramIndex
+                uint index = 0;
+                llvm::inst_iterator iter = llvm::inst_begin(func);
+                llvm::inst_iterator end = llvm::inst_end(func);
+                for (iter, end; iter != end; ++iter) {
+                    exprValue = &*iter;
+                    if (index == paramIndex) break;
+                    index++;
+                }
+            }
+            else {
+                addrFirstOpValue = GetLlvmRegisterValue(regName);
+                exprValue = addrFirstOpValue;
+
+                if (addrSecondOp != nullptr) {
+                    OperandType addrSecondOpType = addrSecondOp->getType();
+                    // TODO
+                    llvm::Type *type = llvm::Type::getInt32Ty(
+                        *PtxToLlvmIrConverter::Context
+                    );
+
+                    double addrSecondOpValue = std::get<double>(
+                        addrSecondOp->getValue()
+                    );
+                    llvm::Value* addrSecondOperandValue = llvm::ConstantInt::get(
+                        type,
+                        addrSecondOpValue,
+                        true
+                    );
+                }
             }
 
-            llvm::Type* destType = PtxToLlvmIrConverter::GetTypeMapping(
-                Types[0]
-            )(*PtxToLlvmIrConverter::Context);
+            if (sourceOpValue == nullptr || exprValue == nullptr)
+                return;
+
             llvm::Value* st = PtxToLlvmIrConverter::Builder->CreateStore(
                 sourceOpValue,
-                addrFirstOpValue
+                exprValue
             );
 
             genLlvmInstructions.push_back(st);
         }
     }
     else if (Inst == "cvta") {
-        std::string regName = std::get<std::string>(SourceOps[0]->getValue());
-        llvm::Value* op = GetLlvmRegisterValue(regName);
+        // std::string regName = std::get<std::string>(SourceOps[0]->getValue());
+        // llvm::Value* op = GetLlvmRegisterValue(regName);
 
-        llvm::Value* load = PtxToLlvmIrConverter::Builder->CreateLoad(
-            op->getType(),
-            op
-        );
+        // llvm::Value* load = PtxToLlvmIrConverter::Builder->CreateLoad(
+        //     op->getType(),
+        //     op
+        // );
 
-        genLlvmInstructions.push_back(load);
+        // genLlvmInstructions.push_back(load);
     }
     else if (Inst == "mov") {
         if (SourceOps[0]->getType() == OperandType::Register) {
@@ -805,6 +854,50 @@ void InstrStatement::ToLlvmIr() {
         }
 
         genLlvmInstructions.push_back(ext);
+    }
+
+    // Check source operand. If it's a label check if it's a global variable
+    if (
+        (SourceOps.size() > 0) &&
+        (SourceOps[0] != nullptr) && 
+        (SourceOps[0]->getType() == OperandType::Label)
+    ) {
+        std::string value = std::get<std::string>(
+            SourceOps[0]->getValue()
+        );
+
+        std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
+        LinkingDirectStatement* globVarStmt = nullptr;
+        for (auto stmt : statements) {
+            if (stmt->getId() > currKernel->getId()) break;
+            LinkingDirectStatement* linkingDir =
+                dynamic_cast<LinkingDirectStatement*>(stmt.get());
+            if (linkingDir != nullptr) {
+                if (linkingDir->getIdentifier() == value)
+                    globVarStmt = linkingDir;
+            }
+        }
+
+        // If not a global variable, return
+        if (globVarStmt == nullptr) return;
+
+        std::string ptxAddrSpace = globVarStmt->getAddressSpace();
+        uint addrSpace = PtxToLlvmIrConverter::ConvertPtxToLlvmAddrSpace(
+            ptxAddrSpace
+        );
+        llvm::GlobalVariable* globVar = new llvm::GlobalVariable(
+            *PtxToLlvmIrConverter::Module,
+            PtxToLlvmIrConverter::Builder->getInt32Ty(),
+            false,
+            llvm::GlobalValue::LinkOnceODRLinkage,
+            nullptr,
+            value,
+            nullptr,
+            llvm::GlobalVariable::ThreadLocalMode::NotThreadLocal,
+            addrSpace
+        );
+
+        PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
     }
 
     PtxToLlvmIrConverter::setPtxToLlvmMapValue(getId(), genLlvmInstructions);
