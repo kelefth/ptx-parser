@@ -213,8 +213,8 @@ void ParseInstrStatement() {
                         isAlreadyAddress = true;
 
                         opType = OperandType::Address;
-
-                        AddressExpr addressExpr(std::make_shared<Operand>(currStrVal, opType));
+                        OperandType addrOpType = OperandType::Register;
+                        AddressExpr addressExpr(std::make_shared<Operand>(currStrVal, addrOpType));
 
                         if (passedDest)
                             sourceOps.push_back(std::move(std::make_unique<Operand>(addressExpr, opType)));
