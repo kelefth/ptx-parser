@@ -151,7 +151,7 @@ std::shared_ptr<Statement> InstrStatement::GetStatementById(unsigned int id) {
 
 llvm::Value* InstrStatement::GetLlvmRegisterValue(
     std::string ptxOperandName,
-    bool isComplex = false
+    bool isComplex = true
 ) {
     std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
     if (currKernel == nullptr) return nullptr;
@@ -198,7 +198,7 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(
         for (auto &op : userStmtInst->getSourceOps()) {
             if (op->getType() == OperandType::Register) {
                 std::string opName = std::get<std::string>(op->getValue());
-                llvm::Value* value = GetLlvmRegisterValue(opName, true);
+                llvm::Value* value = GetLlvmRegisterValue(opName);
                 return value;
             }
         }
@@ -420,7 +420,7 @@ void InstrStatement::ToLlvmIr() {
     else if (Inst == "st") {
         auto destOpAddr = std::get<AddressExpr>(DestOps[0]->getValue());
         std::string sourceOpName = std::get<std::string>(SourceOps[0]->getValue());
-        llvm::Value* sourceOpValue = GetLlvmRegisterValue(sourceOpName, true);
+        llvm::Value* sourceOpValue = GetLlvmRegisterValue(sourceOpName);
 
         std::shared_ptr<Operand> addrFirstOp =
             destOpAddr.getFirstOperand();
@@ -881,11 +881,17 @@ void InstrStatement::ToLlvmIr() {
         // If not a global variable, return
         if (globVarStmt == nullptr) return;
 
+        // Check if global variable already exists. If yes, do nothing
+        llvm::GlobalVariable* globVar =
+            PtxToLlvmIrConverter::Module->getGlobalVariable(value);
+
+        if (globVar != nullptr) return;
+
         std::string ptxAddrSpace = globVarStmt->getAddressSpace();
         uint addrSpace = PtxToLlvmIrConverter::ConvertPtxToLlvmAddrSpace(
             ptxAddrSpace
         );
-        llvm::GlobalVariable* globVar = new llvm::GlobalVariable(
+        globVar = new llvm::GlobalVariable(
             *PtxToLlvmIrConverter::Module,
             PtxToLlvmIrConverter::Builder->getInt32Ty(),
             false,
@@ -897,7 +903,7 @@ void InstrStatement::ToLlvmIr() {
             addrSpace
         );
 
-        PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+        // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
     }
 
     PtxToLlvmIrConverter::setPtxToLlvmMapValue(getId(), genLlvmInstructions);
