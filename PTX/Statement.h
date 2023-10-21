@@ -5,7 +5,7 @@
 
 #include "llvm/IR/Value.h"
 
-#define STACK_POINTER "%SP"
+// #define STACK_POINTER "%SP"
 
 class Statement {
 

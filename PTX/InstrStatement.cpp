@@ -404,12 +404,12 @@ void InstrStatement::ToLlvmIr() {
                     llvm::Type *argType = arg.getType();
                     llvm::AllocaInst *alloca =
                         PtxToLlvmIrConverter::Builder->CreateAlloca(argType);
-                    // llvm::Value *store =
-                    //     PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
+                    llvm::Value *store =
+                        PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
 
                     // Store generated instructions
                     genLlvmInstructions.push_back(alloca);
-                    // genLlvmInstructions.push_back(store);
+                    genLlvmInstructions.push_back(store);
                 }
             }
         }
@@ -500,70 +500,24 @@ void InstrStatement::ToLlvmIr() {
                 addrFirstOp->getValue()
             );
 
-            llvm::Value* addrFirstOpValue;
-            llvm::Value* exprValue;
+            llvm::Value* addrFirstOpValue = GetLlvmRegisterValue(regName);;
+            llvm::Value* exprValue = addrFirstOpValue;
 
-            if (regName == STACK_POINTER) {
-                llvm::Function *func =
-                    &PtxToLlvmIrConverter::Module->getFunctionList().back();
+            if (addrSecondOp != nullptr) {
+                OperandType addrSecondOpType = addrSecondOp->getType();
+                // TODO
+                llvm::Type *type = llvm::Type::getInt32Ty(
+                    *PtxToLlvmIrConverter::Context
+                );
 
-                uint paramIndex;
-                if (addrSecondOp == nullptr) {
-                    paramIndex = 0;
-                }
-                else {
-
-                    double addrSecondOpValue = std::get<double>(
-                        addrSecondOp->getValue()
-                    );
-
-                    uint offset = addrSecondOpValue;
-                    uint currOffset = 0;
-                    paramIndex = 0;
-                    auto args = func->args();
-                    for (auto &arg : args) {
-                        if (currOffset == offset) break;
-                        
-                        llvm::Type *argType = arg.getType();
-                        llvm::TypeSize typeSize =
-                            PtxToLlvmIrConverter::Module->getDataLayout().getTypeAllocSizeInBits(argType);
-                        uint64_t typeSizeInt = typeSize.getFixedSize() / 8;
-
-                        currOffset += typeSizeInt;
-                        paramIndex++;
-                    }
-                }
-
-                // find alloca of the parameter in index paramIndex
-                uint index = 0;
-                llvm::inst_iterator iter = llvm::inst_begin(func);
-                llvm::inst_iterator end = llvm::inst_end(func);
-                for (iter, end; iter != end; ++iter) {
-                    exprValue = &*iter;
-                    if (index == paramIndex) break;
-                    index++;
-                }
-            }
-            else {
-                addrFirstOpValue = GetLlvmRegisterValue(regName);
-                exprValue = addrFirstOpValue;
-
-                if (addrSecondOp != nullptr) {
-                    OperandType addrSecondOpType = addrSecondOp->getType();
-                    // TODO
-                    llvm::Type *type = llvm::Type::getInt32Ty(
-                        *PtxToLlvmIrConverter::Context
-                    );
-
-                    double addrSecondOpValue = std::get<double>(
-                        addrSecondOp->getValue()
-                    );
-                    llvm::Value* addrSecondOperandValue = llvm::ConstantInt::get(
-                        type,
-                        addrSecondOpValue,
-                        true
-                    );
-                }
+                double addrSecondOpValue = std::get<double>(
+                    addrSecondOp->getValue()
+                );
+                llvm::Value* addrSecondOperandValue = llvm::ConstantInt::get(
+                    type,
+                    addrSecondOpValue,
+                    true
+                );
             }
 
             if (sourceOpValue == nullptr || exprValue == nullptr)
@@ -717,174 +671,173 @@ void InstrStatement::ToLlvmIr() {
         //     genLlvmInstructions.push_back(gep);
         // }
         // else {
-            llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
-            llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-            if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-                return;
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
 
-            llvm::Value* add = PtxToLlvmIrConverter::Builder->CreateAdd(
-                firstOperandValue,
-                secondOperandValue
-            );
+        llvm::Value* add = PtxToLlvmIrConverter::Builder->CreateAdd(
+            firstOperandValue,
+            secondOperandValue
+        );
 
-            genLlvmInstructions.push_back(add);
+        genLlvmInstructions.push_back(add);
 
-            // check operands for global variables and update global variable
-            // if found
-            InstrStatement* currInst = this;
-            while (
-                (currInst != nullptr) && 
-                (currInst->getInst() == "add") || (currInst->getInst() == "cvta")
-            ) {
-                OperandType sourceOpType = currInst->getSourceOps()[0]->getType();
+        // check operands for global variables and update global variable
+        // if found
+        InstrStatement* currInst = this;
+        while (
+            (currInst != nullptr) && 
+            (currInst->getInst() == "add") || (currInst->getInst() == "cvta")
+        ) {
+            OperandType sourceOpType = currInst->getSourceOps()[0]->getType();
 
-                if (sourceOpType == OperandType::Register) {
-                    // find when it was written
-                    currInst = GetOperandWriteInstruction(currInst, 0);
-                }
-                else break;
+            if (sourceOpType == OperandType::Register) {
+                // find when it was written
+                currInst = GetOperandWriteInstruction(currInst, 0);
             }
+            else break;
+        }
 
-            if (currInst == nullptr) return;
+        if (currInst == nullptr) return;
 
-            if (currInst->Inst == "mov") {
-                OperandType sourceOpType = currInst->getSourceOps()[0]->getType();
-                if (sourceOpType == OperandType::Label) {
-                    std::string sourceOpName = std::get<std::string>(
-                        currInst->getSourceOps()[0]->getValue()
+        if (currInst->Inst == "mov") {
+            OperandType sourceOpType = currInst->getSourceOps()[0]->getType();
+            if (sourceOpType == OperandType::Label) {
+                std::string sourceOpName = std::get<std::string>(
+                    currInst->getSourceOps()[0]->getValue()
+                );
+
+                // find global var used in mov instruction
+                LinkingDirectStatement* globVar = GetGlobalVar(sourceOpName);
+                if (globVar == nullptr) return;
+
+                int globVarSize = globVar->getSize();
+
+                // get previous instruction of this instruction (add)
+                // std::shared_ptr<Statement> prevStmt = GetStatementById(
+                //     getId() - 1
+                // );
+                // InstrStatement* prevInst =
+                //     dynamic_cast<InstrStatement*>(prevStmt.get());
+
+                // find where the 2nd source operand of this instruction
+                // (add) was written and if it's a mul or shl instruction
+                // get the immediate value
+                InstrStatement* writeInst = GetOperandWriteInstruction(
+                    this, 1
+                );
+
+                if (
+                    (writeInst == nullptr) ||
+                    ((writeInst->getInst() != "mul") && (writeInst->getInst() != "shl"))
+                ) return;
+                // get second operand and get value if immediate
+                OperandType writeInstType =
+                    writeInst->getSourceOps()[1]->getType();
+                
+                if (writeInstType == OperandType::Immediate) {
+                    int writeInstValue = std::get<double>(
+                        writeInst->getSourceOps()[1]->getValue()
                     );
 
-                    // find global var used in mov instruction
-                    LinkingDirectStatement* globVar = GetGlobalVar(sourceOpName);
-                    if (globVar == nullptr) return;
+                    // based on this value update the type of the globar var
+                    // in the IR instruction
+                    llvm::Value* llvmValue =
+                        PtxToLlvmIrConverter::getPtxToLlvmMapValue(
+                            currInst->getId()
+                        )[0];
 
-                    int globVarSize = globVar->getSize();
+                    llvm::GlobalValue* globVarLlvmValue =
+                        llvm::cast<llvm::GlobalValue>(llvmValue);
 
-                    // get previous instruction of this instruction (add)
-                    // std::shared_ptr<Statement> prevStmt = GetStatementById(
-                    //     getId() - 1
-                    // );
-                    // InstrStatement* prevInst =
-                    //     dynamic_cast<InstrStatement*>(prevStmt.get());
-
-                    // find where the 2nd source operand of this instruction
-                    // (add) was written and if it's a mul or shl instruction
-                    // get the immediate value
-                    InstrStatement* writeInst = GetOperandWriteInstruction(
-                        this, 1
-                    );
-
-                    if (
-                        (writeInst == nullptr) ||
-                        ((writeInst->getInst() != "mul") && (writeInst->getInst() != "shl"))
-                    ) return;
-                    // get second operand and get value if immediate
-                    OperandType writeInstType =
-                        writeInst->getSourceOps()[1]->getType();
+                    llvm::Type* valueType = globVarLlvmValue->getValueType();
+                    uint numElements = valueType->getArrayNumElements();
+                    llvm::Type* elemType = valueType->getArrayElementType();
                     
-                    if (writeInstType == OperandType::Immediate) {
-                        int writeInstValue = std::get<double>(
-                            writeInst->getSourceOps()[1]->getValue()
+                    uint newElemTypeSize;
+                    if (writeInst->getInst() == "mul")
+                        newElemTypeSize = writeInstValue;
+                    else
+                        newElemTypeSize = 1 << writeInstValue;
+
+                    uint newElemTypeSizeBits = newElemTypeSize * 8;
+
+                    llvm::ArrayType* newType;
+                    if (elemType->getTypeID() == llvm::Type::VoidTyID) {
+                        newType = llvm::ArrayType::get(
+                            PtxToLlvmIrConverter::Builder->getIntNTy(
+                                newElemTypeSizeBits
+                            ),
+                            numElements
                         );
+                    }
+                    else {
+                        llvm::TypeSize elemTypeSize =
+                        PtxToLlvmIrConverter::Module->getDataLayout()
+                            .getTypeAllocSize(elemType);
+                        uint64_t elemTypeSizeInt = elemTypeSize.getFixedSize();
+                        uint rowSize = elemTypeSizeInt / newElemTypeSize;
+                        uint numOfRows = numElements / (rowSize * newElemTypeSize);
 
-                        // based on this value update the type of the globar var
-                        // in the IR instruction
-                        llvm::Value* llvmValue =
-                            PtxToLlvmIrConverter::getPtxToLlvmMapValue(
-                                currInst->getId()
-                            )[0];
-
-                        llvm::GlobalValue* globVarLlvmValue =
-                            llvm::cast<llvm::GlobalValue>(llvmValue);
-
-                        llvm::Type* valueType = globVarLlvmValue->getValueType();
-                        uint numElements = valueType->getArrayNumElements();
-                        llvm::Type* elemType = valueType->getArrayElementType();
-                        
-                        uint newElemTypeSize;
-                        if (writeInst->getInst() == "mul")
-                            newElemTypeSize = writeInstValue;
-                        else
-                            newElemTypeSize = 1 << writeInstValue;
-
-                        uint newElemTypeSizeBits = newElemTypeSize * 8;
-
-                        llvm::ArrayType* newType;
-                        if (elemType->getTypeID() == llvm::Type::VoidTyID) {
-                            newType = llvm::ArrayType::get(
-                                PtxToLlvmIrConverter::Builder->getIntNTy(
+                        newType = llvm::ArrayType::get(
+                            llvm::ArrayType::get(
+                                llvm::Type::getIntNTy(
+                                    *PtxToLlvmIrConverter::Context,
                                     newElemTypeSizeBits
                                 ),
-                                numElements
-                            );
-                        }
-                        else {
-                            llvm::TypeSize elemTypeSize =
-                            PtxToLlvmIrConverter::Module->getDataLayout()
-                                .getTypeAllocSize(elemType);
-                            uint64_t elemTypeSizeInt = elemTypeSize.getFixedSize();
-                            uint rowSize = elemTypeSizeInt / newElemTypeSize;
-                            uint numOfRows = numElements / (rowSize * newElemTypeSize);
+                                rowSize
+                            ),
+                            numOfRows
+                        );
+                    }
 
-                            newType = llvm::ArrayType::get(
-                                llvm::ArrayType::get(
-                                    llvm::Type::getIntNTy(
-                                        *PtxToLlvmIrConverter::Context,
-                                        newElemTypeSizeBits
-                                    ),
-                                    rowSize
-                                ),
-                                numOfRows
-                            );
-                        }
+                    // newType->print(llvm::outs(), true);
 
-                        // newType->print(llvm::outs(), true);
+                    if (newType != globVarLlvmValue->getValueType()) {
+                        // newType->print(llvm::outs());
+                        // std::cout << " != ";
+                        // globVarLlvmValue->getValueType()->print(llvm::outs());
+                        // std::cout << std::endl;
+                        llvm::GlobalValue::LinkageTypes
+                            globVarLinkage = globVarLlvmValue->getLinkage();
+                        llvm::StringRef globVarName =
+                            globVarLlvmValue->getName();
+                        llvm::GlobalValue::ThreadLocalMode globVartlm =
+                                globVarLlvmValue->getThreadLocalMode();
+                        uint globVarAddrSpace =
+                            globVarLlvmValue->getAddressSpace();
 
-                        if (newType != globVarLlvmValue->getValueType()) {
-                            // newType->print(llvm::outs());
-                            // std::cout << " != ";
-                            // globVarLlvmValue->getValueType()->print(llvm::outs());
-                            // std::cout << std::endl;
-                            llvm::GlobalValue::LinkageTypes
-                                globVarLinkage = globVarLlvmValue->getLinkage();
-                            llvm::StringRef globVarName =
-                                globVarLlvmValue->getName();
-                            llvm::GlobalValue::ThreadLocalMode globVartlm =
-                                 globVarLlvmValue->getThreadLocalMode();
-                            uint globVarAddrSpace =
-                                globVarLlvmValue->getAddressSpace();
+                        // globVarLlvmValue->replaceAllUsesWith(
+                        //     newGlobalVarValue
+                        // );
+                        globVarLlvmValue->eraseFromParent();
 
-                            // globVarLlvmValue->replaceAllUsesWith(
-                            //     newGlobalVarValue
-                            // );
-                            globVarLlvmValue->eraseFromParent();
-
-                            llvm::GlobalVariable* newGlobalVarValue =
-                                new llvm::GlobalVariable(
-                                    *PtxToLlvmIrConverter::Module,
-                                    newType,
-                                    false,
-                                    globVarLinkage,
-                                    nullptr,
-                                    globVarName,
-                                    nullptr,
-                                    globVartlm,
-                                    globVarAddrSpace
-                                );
-
-                            std::vector<llvm::Value*> newLlvmInstValueMap;
-                            newLlvmInstValueMap.push_back(newGlobalVarValue);
-                            PtxToLlvmIrConverter::setPtxToLlvmMapValue(
-                                currInst->getId(),
-                                newLlvmInstValueMap
+                        llvm::GlobalVariable* newGlobalVarValue =
+                            new llvm::GlobalVariable(
+                                *PtxToLlvmIrConverter::Module,
+                                newType,
+                                false,
+                                globVarLinkage,
+                                nullptr,
+                                globVarName,
+                                nullptr,
+                                globVartlm,
+                                globVarAddrSpace
                             );
 
-                        }
+                        std::vector<llvm::Value*> newLlvmInstValueMap;
+                        newLlvmInstValueMap.push_back(newGlobalVarValue);
+                        PtxToLlvmIrConverter::setPtxToLlvmMapValue(
+                            currInst->getId(),
+                            newLlvmInstValueMap
+                        );
+
                     }
                 }
             }
-
+        }
             
         // }
     }
@@ -1083,35 +1036,6 @@ void InstrStatement::ToLlvmIr() {
             PtxToLlvmIrConverter::Module->getGlobalVariable(value);
 
         if (globVar != nullptr) return;
-
-        // Check previous instruction
-        // std::unique_ptr currKernel = GetCurrentKernel();
-        // std::vector<std::shared_ptr<Statement>> currKernelStatements =
-        //     currKernel->getBodyStatements();
-        // std::shared_ptr<Statement> prevStmt = nullptr;
-        // for (auto stmt : currKernelStatements) {
-        //     if (stmt->getId() == (getId() - 1))
-        //         prevStmt = stmt;
-        // }
-
-        // if (prevStmt == nullptr) return;
-        // InstrStatement* prevInstrStmt = dynamic_cast<InstrStatement*>(
-        //     prevStmt.get()
-        // );
-
-        // std::string prevInstName = prevInstrStmt->getInst();
-        // uint sizeofRowBits = 0;
-        // if ((prevInstName == "mul") || (prevInstName == "shl")) {
-        //     if ((prevInstrStmt->getSourceOps()[1])->getType() == OperandType::Immediate) {
-        //         auto opValue = (prevInstrStmt->getSourceOps()[1])->getValue();
-        //         uint sizeofRow = std::get<double>(opValue);
-
-        //         if (prevInstName == "shl")
-        //             sizeofRow = 1 << sizeofRow;
-                
-        //         sizeofRowBits = sizeofRow * 8;
-        //     }
-        // }
 
         std::string ptxAddrSpace = globVarStmt->getAddressSpace();
         uint addrSpace = PtxToLlvmIrConverter::ConvertPtxToLlvmAddrSpace(
