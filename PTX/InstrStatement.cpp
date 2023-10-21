@@ -262,6 +262,60 @@ llvm::Constant* InstrStatement::GetImmediateValue(double value) {
     );
 }
 
+LinkingDirectStatement* InstrStatement::GetGlobalVar(std::string name) {
+    std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
+    LinkingDirectStatement* globVarStmt = nullptr;
+    for (auto stmt : statements) {
+        if (stmt->getId() > currKernel->getId()) break;
+        LinkingDirectStatement* linkingDir =
+            dynamic_cast<LinkingDirectStatement*>(stmt.get());
+        if (linkingDir != nullptr) {
+            if (linkingDir->getIdentifier() == name)
+                globVarStmt = linkingDir;
+        }
+    }
+
+    return globVarStmt;
+}
+
+InstrStatement* InstrStatement::GetOperandWriteInstruction(
+    InstrStatement* inst,
+    uint sourceOpNum
+) {
+    std::unique_ptr currKernel = GetCurrentKernel();
+    std::vector<std::shared_ptr<Statement>> currKernelStatements =
+        currKernel->getBodyStatements();
+
+    if (sourceOpNum > inst->getSourceOps().size() - 1) return nullptr;
+
+    auto opValue = inst->getSourceOps()[sourceOpNum]->getValue();
+    std::string sourceOpName = std::get<std::string>(opValue);
+
+    std::shared_ptr<Statement> userStmt = nullptr;
+    for (const auto stmt : currKernelStatements) {
+        unsigned int stmtId = stmt->getId();
+        if (stmtId >= inst->getId()) break;
+        InstrStatement* instrStatement =
+            dynamic_cast<InstrStatement*>(stmt.get());
+        if (instrStatement == nullptr)
+            continue;
+        for (const auto &destOp : instrStatement->getDestOps()) {
+            if (destOp->getType() == OperandType::Register) {
+                std::string destOpValue = std::get<std::string>(
+                    destOp->getValue()
+                );
+
+                if (destOpValue == sourceOpName) {
+                    userStmt = stmt;
+                }
+            }
+        }
+    }
+
+    InstrStatement* userInst = dynamic_cast<InstrStatement*>(userStmt.get());
+    return userInst;
+}
+
 void InstrStatement::ToLlvmIr() {
     std::vector<llvm::Value*> genLlvmInstructions;
 
@@ -565,10 +619,6 @@ void InstrStatement::ToLlvmIr() {
         }
     }
     else if (Inst == "add") {
-        std::unique_ptr currKernel = GetCurrentKernel();
-        std::vector<std::shared_ptr<Statement>> currKernelStatements =
-            currKernel->getBodyStatements();
-
         // check previous instructions for patterns
         // unsigned int currInstIndex = 0;
         // for (auto stmt : currKernelStatements) {
@@ -679,6 +729,163 @@ void InstrStatement::ToLlvmIr() {
             );
 
             genLlvmInstructions.push_back(add);
+
+            // check operands for global variables and update global variable
+            // if found
+            InstrStatement* currInst = this;
+            while (
+                (currInst != nullptr) && 
+                (currInst->getInst() == "add") || (currInst->getInst() == "cvta")
+            ) {
+                OperandType sourceOpType = currInst->getSourceOps()[0]->getType();
+
+                if (sourceOpType == OperandType::Register) {
+                    // find when it was written
+                    currInst = GetOperandWriteInstruction(currInst, 0);
+                }
+                else break;
+            }
+
+            if (currInst == nullptr) return;
+
+            if (currInst->Inst == "mov") {
+                OperandType sourceOpType = currInst->getSourceOps()[0]->getType();
+                if (sourceOpType == OperandType::Label) {
+                    std::string sourceOpName = std::get<std::string>(
+                        currInst->getSourceOps()[0]->getValue()
+                    );
+
+                    // find global var used in mov instruction
+                    LinkingDirectStatement* globVar = GetGlobalVar(sourceOpName);
+                    if (globVar == nullptr) return;
+
+                    int globVarSize = globVar->getSize();
+
+                    // get previous instruction of this instruction (add)
+                    // std::shared_ptr<Statement> prevStmt = GetStatementById(
+                    //     getId() - 1
+                    // );
+                    // InstrStatement* prevInst =
+                    //     dynamic_cast<InstrStatement*>(prevStmt.get());
+
+                    // find where the 2nd source operand of this instruction
+                    // (add) was written and if it's a mul or shl instruction
+                    // get the immediate value
+                    InstrStatement* writeInst = GetOperandWriteInstruction(
+                        this, 1
+                    );
+
+                    if (
+                        (writeInst == nullptr) ||
+                        ((writeInst->getInst() != "mul") && (writeInst->getInst() != "shl"))
+                    ) return;
+                    // get second operand and get value if immediate
+                    OperandType writeInstType =
+                        writeInst->getSourceOps()[1]->getType();
+                    
+                    if (writeInstType == OperandType::Immediate) {
+                        int writeInstValue = std::get<double>(
+                            writeInst->getSourceOps()[1]->getValue()
+                        );
+
+                        // based on this value update the type of the globar var
+                        // in the IR instruction
+                        llvm::Value* llvmValue =
+                            PtxToLlvmIrConverter::getPtxToLlvmMapValue(
+                                currInst->getId()
+                            )[0];
+
+                        llvm::GlobalValue* globVarLlvmValue =
+                            llvm::cast<llvm::GlobalValue>(llvmValue);
+
+                        llvm::Type* valueType = globVarLlvmValue->getValueType();
+                        uint numElements = valueType->getArrayNumElements();
+                        llvm::Type* elemType = valueType->getArrayElementType();
+                        
+                        uint newElemTypeSize;
+                        if (writeInst->getInst() == "mul")
+                            newElemTypeSize = writeInstValue;
+                        else
+                            newElemTypeSize = 1 << writeInstValue;
+
+                        uint newElemTypeSizeBits = newElemTypeSize * 8;
+
+                        llvm::ArrayType* newType;
+                        if (elemType->getTypeID() == llvm::Type::VoidTyID) {
+                            newType = llvm::ArrayType::get(
+                                PtxToLlvmIrConverter::Builder->getIntNTy(
+                                    newElemTypeSizeBits
+                                ),
+                                numElements
+                            );
+                        }
+                        else {
+                            llvm::TypeSize elemTypeSize =
+                            PtxToLlvmIrConverter::Module->getDataLayout()
+                                .getTypeAllocSize(elemType);
+                            uint64_t elemTypeSizeInt = elemTypeSize.getFixedSize();
+                            uint rowSize = elemTypeSizeInt / newElemTypeSize;
+                            uint numOfRows = numElements / (rowSize * newElemTypeSize);
+
+                            newType = llvm::ArrayType::get(
+                                llvm::ArrayType::get(
+                                    llvm::Type::getIntNTy(
+                                        *PtxToLlvmIrConverter::Context,
+                                        newElemTypeSizeBits
+                                    ),
+                                    rowSize
+                                ),
+                                numOfRows
+                            );
+                        }
+
+                        // newType->print(llvm::outs(), true);
+
+                        if (newType != globVarLlvmValue->getValueType()) {
+                            // newType->print(llvm::outs());
+                            // std::cout << " != ";
+                            // globVarLlvmValue->getValueType()->print(llvm::outs());
+                            // std::cout << std::endl;
+                            llvm::GlobalValue::LinkageTypes
+                                globVarLinkage = globVarLlvmValue->getLinkage();
+                            llvm::StringRef globVarName =
+                                globVarLlvmValue->getName();
+                            llvm::GlobalValue::ThreadLocalMode globVartlm =
+                                 globVarLlvmValue->getThreadLocalMode();
+                            uint globVarAddrSpace =
+                                globVarLlvmValue->getAddressSpace();
+
+                            // globVarLlvmValue->replaceAllUsesWith(
+                            //     newGlobalVarValue
+                            // );
+                            globVarLlvmValue->eraseFromParent();
+
+                            llvm::GlobalVariable* newGlobalVarValue =
+                                new llvm::GlobalVariable(
+                                    *PtxToLlvmIrConverter::Module,
+                                    newType,
+                                    false,
+                                    globVarLinkage,
+                                    nullptr,
+                                    globVarName,
+                                    nullptr,
+                                    globVartlm,
+                                    globVarAddrSpace
+                                );
+
+                            std::vector<llvm::Value*> newLlvmInstValueMap;
+                            newLlvmInstValueMap.push_back(newGlobalVarValue);
+                            PtxToLlvmIrConverter::setPtxToLlvmMapValue(
+                                currInst->getId(),
+                                newLlvmInstValueMap
+                            );
+
+                        }
+                    }
+                }
+            }
+
+            
         // }
     }
     else if (Inst == "mul") {
@@ -866,17 +1073,7 @@ void InstrStatement::ToLlvmIr() {
             SourceOps[0]->getValue()
         );
 
-        std::unique_ptr<KernelDirectStatement> currKernel = GetCurrentKernel();
-        LinkingDirectStatement* globVarStmt = nullptr;
-        for (auto stmt : statements) {
-            if (stmt->getId() > currKernel->getId()) break;
-            LinkingDirectStatement* linkingDir =
-                dynamic_cast<LinkingDirectStatement*>(stmt.get());
-            if (linkingDir != nullptr) {
-                if (linkingDir->getIdentifier() == value)
-                    globVarStmt = linkingDir;
-            }
-        }
+        LinkingDirectStatement* globVarStmt = GetGlobalVar(value);
 
         // If not a global variable, return
         if (globVarStmt == nullptr) return;
@@ -887,21 +1084,73 @@ void InstrStatement::ToLlvmIr() {
 
         if (globVar != nullptr) return;
 
+        // Check previous instruction
+        // std::unique_ptr currKernel = GetCurrentKernel();
+        // std::vector<std::shared_ptr<Statement>> currKernelStatements =
+        //     currKernel->getBodyStatements();
+        // std::shared_ptr<Statement> prevStmt = nullptr;
+        // for (auto stmt : currKernelStatements) {
+        //     if (stmt->getId() == (getId() - 1))
+        //         prevStmt = stmt;
+        // }
+
+        // if (prevStmt == nullptr) return;
+        // InstrStatement* prevInstrStmt = dynamic_cast<InstrStatement*>(
+        //     prevStmt.get()
+        // );
+
+        // std::string prevInstName = prevInstrStmt->getInst();
+        // uint sizeofRowBits = 0;
+        // if ((prevInstName == "mul") || (prevInstName == "shl")) {
+        //     if ((prevInstrStmt->getSourceOps()[1])->getType() == OperandType::Immediate) {
+        //         auto opValue = (prevInstrStmt->getSourceOps()[1])->getValue();
+        //         uint sizeofRow = std::get<double>(opValue);
+
+        //         if (prevInstName == "shl")
+        //             sizeofRow = 1 << sizeofRow;
+                
+        //         sizeofRowBits = sizeofRow * 8;
+        //     }
+        // }
+
         std::string ptxAddrSpace = globVarStmt->getAddressSpace();
         uint addrSpace = PtxToLlvmIrConverter::ConvertPtxToLlvmAddrSpace(
             ptxAddrSpace
         );
-        globVar = new llvm::GlobalVariable(
-            *PtxToLlvmIrConverter::Module,
-            PtxToLlvmIrConverter::Builder->getInt32Ty(),
-            false,
-            llvm::GlobalValue::LinkOnceODRLinkage,
-            nullptr,
-            value,
-            nullptr,
-            llvm::GlobalVariable::ThreadLocalMode::NotThreadLocal,
-            addrSpace
-        );
+        int globVarSize = globVarStmt->getSize();
+
+        // set global var's type
+        if (globVarSize > 0) {
+            globVar = new llvm::GlobalVariable(
+                *PtxToLlvmIrConverter::Module,
+                llvm::ArrayType::get(
+                    PtxToLlvmIrConverter::Builder->getVoidTy(),
+                    globVarSize
+                ),
+                false,
+                llvm::GlobalValue::LinkOnceODRLinkage,
+                nullptr,
+                value,
+                nullptr,
+                llvm::GlobalVariable::ThreadLocalMode::NotThreadLocal,
+                addrSpace
+            );
+        }
+        else {
+            globVar = new llvm::GlobalVariable(
+                *PtxToLlvmIrConverter::Module,
+                PtxToLlvmIrConverter::Builder->getVoidTy(),
+                false,
+                llvm::GlobalValue::LinkOnceODRLinkage,
+                nullptr,
+                value,
+                nullptr,
+                llvm::GlobalVariable::ThreadLocalMode::NotThreadLocal,
+                addrSpace
+            );
+        }
+
+        genLlvmInstructions.push_back(globVar);
 
         // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
     }

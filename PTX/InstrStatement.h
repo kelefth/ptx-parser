@@ -11,6 +11,7 @@
 #include "Statement.h"
 #include "Operand.h"
 #include "KernelDirectStatement.h"
+#include "LinkingDirectStatement.h"
 
 class InstrStatement : public Statement {
 
@@ -40,6 +41,16 @@ class InstrStatement : public Statement {
     llvm::Constant* GetImmediateValue(double value);
 
     std::unique_ptr<KernelDirectStatement> GetCurrentKernel();
+
+    // Check if label "name" is a global variable and return it
+    LinkingDirectStatement* GetGlobalVar(std::string name);
+
+    // Find and return the last instruction before inst, where the source
+    // operand at sourceOpNum was modified
+    InstrStatement* GetOperandWriteInstruction(
+        InstrStatement* inst,
+        uint sourceOpNum
+    );
 
 public:
     InstrStatement(
