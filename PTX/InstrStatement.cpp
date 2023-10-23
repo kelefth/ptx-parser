@@ -203,14 +203,33 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(
             }
         }
     }
+    
+    if (llvmStmts.empty()) return nullptr;
 
-    // get the value of the last of the generated llvm instructions
+    // generate a load and get its value if the last generate instruction is a
+    // store, else get the value of the last generated llvm instruction
     // that returns a value
+    llvm::Value* lastLlvmStmt = llvmStmts.back();
+    llvm::Instruction* lastLlvmInst = llvm::cast<llvm::Instruction>(
+        lastLlvmStmt
+    );
+    std::string lastLlvmStmtName = lastLlvmInst->getOpcodeName();
     llvm::Value* instValue = nullptr;
-    for (auto it = llvmStmts.rbegin(); it != llvmStmts.rend(); ++it) {
-        if ((*it)->getType()->getTypeID() != llvm::Type::VoidTyID) {
-            instValue = *it;
-            break;
+    if (lastLlvmStmtName == "store") {
+        llvm::Value* firstOperand = lastLlvmInst->getOperand(0);
+        llvm::Value* secondOperand = lastLlvmInst->getOperand(1);
+        llvm::Type* loadType = firstOperand->getType();
+        instValue = PtxToLlvmIrConverter::Builder->CreateLoad(
+            loadType,
+            secondOperand
+        );
+    }
+    else {
+        for (auto it = llvmStmts.rbegin(); it != llvmStmts.rend(); ++it) {
+            if ((*it)->getType()->getTypeID() != llvm::Type::VoidTyID) {
+                instValue = *it;
+                break;
+            }
         }
     }
 
@@ -368,13 +387,51 @@ void InstrStatement::ToLlvmIr() {
         }
         else {
             std::string currKernelName = currKernel->getName();
-            llvm::BasicBlock* newblock = llvm::BasicBlock::Create(
-                *PtxToLlvmIrConverter::Context,
-                label,
-                PtxToLlvmIrConverter::Module->getFunction(currKernelName)
+            llvm::Function* currFunction =
+                PtxToLlvmIrConverter::Module->getFunction(currKernelName);
+
+            // check if basic block already exists
+            llvm::BasicBlock* basicBlock = PtxToLlvmIrConverter::GetBasicBlock(
+                currFunction,
+                label
             );
 
-            PtxToLlvmIrConverter::Builder->SetInsertPoint(newblock);
+            // if it doesn't exist, create a new one
+            if (basicBlock == nullptr) {
+                // find the next basic block to insert the new one before it
+                llvm::BasicBlock *nextBasicBlock = nullptr;
+                int minIndex = 9999999;
+                for (llvm::BasicBlock &bb : *currFunction) {
+                    std::string bbName = bb.getName().str();
+                    if (bbName == "") continue;
+                    std::string bbIndexStr = bbName.substr(
+                        bbName.find_last_of('_'),
+                        bbName.length()
+                    );
+                    
+                    std::string newBbIndexStr = label.substr(
+                        label.find_last_of('_'),
+                        label.length()
+                    );
+
+                    int newBbIndex = stoi(newBbIndexStr.erase(0, 1));
+                    int bbIndex = stoi(bbIndexStr.erase(0, 1));
+                    
+                    if ((bbIndex > newBbIndex) && (bbIndex < minIndex)) {
+                        minIndex = bbIndex;
+                        nextBasicBlock = &bb;
+                    }
+                }
+
+                basicBlock = llvm::BasicBlock::Create(
+                    *PtxToLlvmIrConverter::Context,
+                    label,
+                    currFunction,
+                    nextBasicBlock
+                );
+            }
+
+            PtxToLlvmIrConverter::Builder->SetInsertPoint(basicBlock);
         }
 
     }
@@ -841,6 +898,20 @@ void InstrStatement::ToLlvmIr() {
             
         // }
     }
+    else if (Inst == "sub") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
+        llvm::Value* sub = PtxToLlvmIrConverter::Builder->CreateSub(
+            firstOperandValue,
+            secondOperandValue
+        );
+
+        genLlvmInstructions.push_back(sub);
+    }
     else if (Inst == "mul") {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
@@ -868,6 +939,34 @@ void InstrStatement::ToLlvmIr() {
         );
 
         genLlvmInstructions.push_back(shl);
+    }
+    else if (Inst == "and") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
+        llvm::Value* andInst = PtxToLlvmIrConverter::Builder->CreateAnd(
+            firstOperandValue,
+            secondOperandValue
+        );
+
+        genLlvmInstructions.push_back(andInst);
+    }
+    else if (Inst == "or") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
+        llvm::Value* orInst = PtxToLlvmIrConverter::Builder->CreateOr(
+            firstOperandValue,
+            secondOperandValue
+        );
+
+        genLlvmInstructions.push_back(orInst);
     }
     else if (Inst == "mad") {
         
@@ -929,11 +1028,17 @@ void InstrStatement::ToLlvmIr() {
             currKernelName
         );
 
+        // create the false block and move it after the current block
+        llvm::BasicBlock* currBasicBlock
+            = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
         llvm::BasicBlock* falseBlock = llvm::BasicBlock::Create(
             *PtxToLlvmIrConverter::Context,
             "",
             PtxToLlvmIrConverter::Module->getFunction(currKernelName)
         );
+
+        falseBlock->moveAfter(currBasicBlock);
 
         std::string targetValue = std::get<std::string>(
             DestOps[0]->getValue()
@@ -949,18 +1054,42 @@ void InstrStatement::ToLlvmIr() {
 
         // if it exists, find the basic block that was created,
         // when converting that instruction, else create a new one
-        llvm::BasicBlock* trueBlock;
-        if (labelExistsBeforeInst) {
-            trueBlock = PtxToLlvmIrConverter::GetBasicBlock(
-                kernelFunc,
-                targetValue
-            );
-        }
-        else {
+        llvm::BasicBlock* trueBlock = PtxToLlvmIrConverter::GetBasicBlock(
+            kernelFunc,
+            targetValue
+        );
+        
+        if (trueBlock == nullptr) {
+            // find the next basic block to insert the new one before it
+            llvm::BasicBlock *nextBasicBlock = nullptr;
+            int minIndex = 9999999;
+            for (llvm::BasicBlock &bb : *kernelFunc) {
+                std::string bbName = bb.getName().str();
+                if (bbName == "") continue;
+                std::string bbIndexStr = bbName.substr(
+                    bbName.find_last_of('_'),
+                    bbName.length()
+                );
+                
+                std::string newBbIndexStr = targetValue.substr(
+                    targetValue.find_last_of('_'),
+                    targetValue.length()
+                );
+
+                int newBbIndex = stoi(newBbIndexStr.erase(0, 1));
+                int bbIndex = stoi(bbIndexStr.erase(0, 1));
+                
+                if ((bbIndex > newBbIndex) && (bbIndex < minIndex)) {
+                    minIndex = bbIndex;
+                    nextBasicBlock = &bb;
+                }
+            }
+
             trueBlock = llvm::BasicBlock::Create(
                 *PtxToLlvmIrConverter::Context,
                 targetValue,
-                kernelFunc
+                kernelFunc,
+                nextBasicBlock
             );
         }
 
