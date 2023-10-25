@@ -11,6 +11,42 @@
 #include "../LinkingDirectStatement.h"
 #include "../Operand.h"
 
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/Reassociate.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/MemoryDependenceAnalysis.h"
+#include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
+
+//////////////////////////////////////////////////////////////////////////////
+#include "llvm/IRReader/IRReader.h"
+#include "llvm-c/IRReader.h"
+#include "llvm/AsmParser/Parser.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/Timer.h"
+#include "llvm/Support/raw_ostream.h"
+//////////////////////////////////////////////////////////////////////////////
+
+using namespace llvm;
+
 int currentToken;
 // std::vector<std::unique_ptr<Statement>> statements;
 // std::vector<InstrStatement> statements;
@@ -588,6 +624,23 @@ void dump_statements() {
     }
 }
 
+Instruction* FindMulInUses(llvm::iterator_range<llvm::Value::use_iterator> uses) {
+    for (llvm::Use &use : uses) {
+        // std::cout << std::endl;
+        // use.get()->print(llvm::outs(), true);
+        // std::cout << std::endl;
+
+        Instruction* useInst = cast<Instruction>(use.get());
+        std::string instName = useInst->getOpcodeName();
+        if (instName == "mul") return useInst;
+
+        if (useInst->getNumOperands() > 0)
+            return FindMulInUses(useInst->getOperand(0)->uses());
+    }
+
+    return nullptr;
+}
+
 int main() {
     currentToken = getToken();
     while(currentToken != token_eof) {
@@ -619,7 +672,145 @@ int main() {
         statement->ToLlvmIr();
     }
 
-    PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+    Module::FunctionListType &funcList =
+        PtxToLlvmIrConverter::Module->getFunctionList();
 
-    dump_statements();
+    // Apply modifications to the IR to fix errors
+    for (Function &func : funcList) {
+        inst_iterator instIt = inst_begin(func);
+        inst_iterator endIt = inst_end(func);
+        for (instIt, endIt; instIt != endIt; ++instIt) {
+            Instruction* currInst = &*instIt;
+            if (currInst == nullptr) continue;
+            std::string currInstName = currInst->getOpcodeName();
+
+            if (currInst->getNumOperands() == 0) continue;
+
+            llvm::Value* firstOperand = currInst->getOperand(0);
+            Type::TypeID firstOperandTypeId = firstOperand->getType()->getTypeID();
+
+            if ((currInstName != "add") || (firstOperandTypeId != Type::PointerTyID))
+                continue;
+
+            llvm::Value* secondOperand = currInst->getOperand(1);
+
+            // remove previous mul instruction
+            llvm::iterator_range<llvm::Value::use_iterator> uses = secondOperand->uses();
+            Instruction* mul = FindMulInUses(uses);
+            if (mul) {
+                mul->replaceAllUsesWith(mul->getOperand(0));
+                mul->eraseFromParent();
+            }
+
+            // TODO: fix other types
+            Type* pointeeType = llvm::Type::getInt32Ty(
+                *PtxToLlvmIrConverter::Context
+            );
+
+            Value* index = secondOperand;
+            Value* indexList[] = { index };
+            GetElementPtrInst* gep = GetElementPtrInst::Create(
+                pointeeType,
+                firstOperand,
+                llvm::ArrayRef<llvm::Value*>(indexList, 1),
+                "",
+                currInst
+            );
+            
+            // replace use of add, increase the iterator to point to the gep
+            // instruction and erase the add instruction
+            currInst->replaceAllUsesWith(gep);
+            instIt++;
+            currInst->eraseFromParent();
+        }
+
+        // Iterate through all basic blocks and add a branch instrution
+        // if there is no terminator instruction already
+        for (auto bbIt = func.begin(); bbIt != func.end(); ++bbIt) {
+            BasicBlock &bb = *bbIt;
+
+            if (bb.getTerminator()) continue;
+
+            auto bbItNext = std::next(bbIt);
+            if (bbItNext != func.end()) {
+                BasicBlock &nextBb = *bbItNext;
+                BranchInst* br = BranchInst::Create(&nextBb, &bb);
+            }
+        }
+
+    }
+
+    PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
+
+    // dump_statements();
+
+    // Analysis
+    Function* kernel =  &funcList.front();
+    std::string kernelName = kernel->getName().str();
+
+    std::cout << "=============================\nVerification Results:" << std::endl;
+    raw_ostream* errStream = &errs();
+    verifyFunction(*kernel, errStream);
+    verifyModule(*PtxToLlvmIrConverter::Module, errStream);
+    std::cout << "=============================" << std::endl;
+
+    FunctionAnalysisManager fam;
+    FunctionPassManager fpm;
+    ModuleAnalysisManager mam;
+    PassInstrumentationCallbacks pic;
+
+    fpm.addPass(InstCombinePass());
+    fpm.addPass(ReassociatePass());
+    fpm.addPass(GVNPass());
+    fpm.addPass(SimplifyCFGPass());
+
+    fam.registerPass([&] { return AAManager(); });
+    fam.registerPass([&] { return AssumptionAnalysis(); });
+    fam.registerPass([&] { return DominatorTreeAnalysis(); });
+    fam.registerPass([&] { return LoopAnalysis(); });
+    fam.registerPass([&] { return MemoryDependenceAnalysis(); });
+    fam.registerPass([&] { return MemorySSAAnalysis(); });
+    fam.registerPass([&] { return OptimizationRemarkEmitterAnalysis(); });
+    fam.registerPass([&] {
+        return OuterAnalysisManagerProxy<ModuleAnalysisManager, Function>(mam);
+    });
+    fam.registerPass(
+        [&] { return PassInstrumentationAnalysis(&pic); });
+    fam.registerPass([&] { return TargetIRAnalysis(); });
+    fam.registerPass([&] { return TargetLibraryAnalysis(); });
+
+    mam.registerPass([&] { return ProfileSummaryAnalysis(); });
+
+
+    ///////////////////////////////////////////////////////////////////////////
+    // static LLVMContext TheContext;
+    // SMDiagnostic Err;
+    // // std::unique_ptr<Module> Mod = parseIRFile("../CUDA/PTX-samples/CUDA-11.6/matrixMul/matrixMul-cuda-nvptx64-nvidia-cuda-sm_35.ll", Err, TheContext);
+    // std::unique_ptr<Module> Mod = parseIRFile("../CUDA/PTX-samples/my-samples/MySimpleMultiCopy/my-output.ll", Err, TheContext);
+
+    // if (!Mod) {
+    //     Err.print("test", errs());
+    //     return 1;
+    // }
+
+    // Function* function = &Mod->getFunctionList().front();
+    // std::cout << function->getName().str() << std::endl;
+    ///////////////////////////////////////////////////////////////////////////
+
+    fam.registerPass([&] { return DominatorTreeAnalysis(); });
+    LoopInfo loopInfo;
+    loopInfo.analyze(fam.getResult<DominatorTreeAnalysis>(*kernel));
+    for (BasicBlock &bb : *kernel) {
+        Loop* loop = loopInfo.getLoopFor(&bb);
+        if (loop)
+            loop->print(outs());
+        // Loop::LoopBounds bounds = loops[0]->getBounds();
+        // std::cout << "OK" << std::endl;
+
+    }
+    // std::vector<Loop*> loops = loopInfo.getTopLevelLoops();
+    // if (loops.size() > 0) {
+    //     loops[0]->print(outs());
+    // }
+    
 }

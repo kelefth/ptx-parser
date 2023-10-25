@@ -5,7 +5,14 @@ LLVM_BIN_PATH 	:= $(LLVM_BUILD_PATH)/bin
 CXX := g++
 CXXFLAGS := -g -std=c++17
 
-LLVM_FLAGS := `$(LLVM_BIN_PATH)/llvm-config --cxxflags --ldflags --libs analysis --system-libs --libs core` -frtti
+LLVM_LIBS := passes \
+			 analysis \
+			 scalaropts \
+			 transformutils \
+			 instrumentation \
+			 core
+
+LLVM_FLAGS := `$(LLVM_BIN_PATH)/llvm-config --cxxflags --ldflags --libs $(LLVM_LIBS) --system-libs ` -frtti
 
 SRC_PTX_DIR := PTX
 SRC_PTX_LEXER_DIR := $(SRC_PTX_DIR)/lexer
