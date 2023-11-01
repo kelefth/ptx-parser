@@ -341,7 +341,7 @@ llvm::PHINode* InstrStatement::CreatePhiInBlockStart(
 ) {
 
     llvm::PHINode* phi = llvm::PHINode::Create(
-        llvm::Type::getInt32Ty(*PtxToLlvmIrConverter::Context),
+        value->getType(),
         2,
         "",
         &*currBasicBlock->getFirstInsertionPt()
