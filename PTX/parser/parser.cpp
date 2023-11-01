@@ -11,12 +11,15 @@
 #include "../LinkingDirectStatement.h"
 #include "../Operand.h"
 
+#include "llvm/Pass.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/Reassociate.h"
@@ -31,18 +34,20 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
 
 //////////////////////////////////////////////////////////////////////////////
-#include "llvm/IRReader/IRReader.h"
-#include "llvm-c/IRReader.h"
-#include "llvm/AsmParser/Parser.h"
-#include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/Timer.h"
-#include "llvm/Support/raw_ostream.h"
+// #include "llvm/IRReader/IRReader.h"
+// #include "llvm-c/IRReader.h"
+// #include "llvm/AsmParser/Parser.h"
+// #include "llvm/Bitcode/BitcodeReader.h"
+// #include "llvm/IR/LLVMContext.h"
+// #include "llvm/IR/Module.h"
+// #include "llvm/Support/MemoryBuffer.h"
+// #include "llvm/Support/SourceMgr.h"
+// #include "llvm/Support/Timer.h"
+// #include "llvm/Support/raw_ostream.h"
 //////////////////////////////////////////////////////////////////////////////
 
 using namespace llvm;
@@ -754,39 +759,15 @@ int main() {
     verifyModule(*PtxToLlvmIrConverter::Module, errStream);
     std::cout << "=============================" << std::endl;
 
-    FunctionAnalysisManager fam;
-    FunctionPassManager fpm;
-    ModuleAnalysisManager mam;
-    PassInstrumentationCallbacks pic;
-
-    fpm.addPass(InstCombinePass());
-    fpm.addPass(ReassociatePass());
-    fpm.addPass(GVNPass());
-    fpm.addPass(SimplifyCFGPass());
-
-    fam.registerPass([&] { return AAManager(); });
-    fam.registerPass([&] { return AssumptionAnalysis(); });
-    fam.registerPass([&] { return DominatorTreeAnalysis(); });
-    fam.registerPass([&] { return LoopAnalysis(); });
-    fam.registerPass([&] { return MemoryDependenceAnalysis(); });
-    fam.registerPass([&] { return MemorySSAAnalysis(); });
-    fam.registerPass([&] { return OptimizationRemarkEmitterAnalysis(); });
-    fam.registerPass([&] {
-        return OuterAnalysisManagerProxy<ModuleAnalysisManager, Function>(mam);
-    });
-    fam.registerPass(
-        [&] { return PassInstrumentationAnalysis(&pic); });
-    fam.registerPass([&] { return TargetIRAnalysis(); });
-    fam.registerPass([&] { return TargetLibraryAnalysis(); });
-
-    mam.registerPass([&] { return ProfileSummaryAnalysis(); });
-
-
     ///////////////////////////////////////////////////////////////////////////
     // static LLVMContext TheContext;
     // SMDiagnostic Err;
     // // std::unique_ptr<Module> Mod = parseIRFile("../CUDA/PTX-samples/CUDA-11.6/matrixMul/matrixMul-cuda-nvptx64-nvidia-cuda-sm_35.ll", Err, TheContext);
-    // std::unique_ptr<Module> Mod = parseIRFile("../CUDA/PTX-samples/my-samples/MySimpleMultiCopy/my-output.ll", Err, TheContext);
+    // // std::unique_ptr<Module> Mod = parseIRFile("../../../CUDA/PTX-samples/CUDA-11.6/matrixMul/matrixMul-cuda-nvptx64-nvidia-cuda-sm_35.ll", Err, TheContext);
+    // // std::unique_ptr<Module> Mod = parseIRFile("../../../CUDA/PTX-samples/CUDA-11.6/matrixMul/matrixMul-cuda-nvptx64-nvidia-cuda-sm_35-O0.ll", Err, TheContext);
+    // std::unique_ptr<Module> Mod = parseIRFile("../../../CUDA/PTX-samples/my-samples/MySimpleMultiCopy/my-output.ll", Err, TheContext);
+    // // std::unique_ptr<Module> Mod = parseIRFile("../../../CUDA/PTX-samples/matrixMul/matrixMul-cuda-nvptx64-nvidia-cuda-sm_20.ll", Err, TheContext);
+    // // std::unique_ptr<Module> Mod = parseIRFile("../../../CUDA/PTX-samples/LoopInfoTest.ll", Err, TheContext);
 
     // if (!Mod) {
     //     Err.print("test", errs());
@@ -796,21 +777,60 @@ int main() {
     // Function* function = &Mod->getFunctionList().front();
     // std::cout << function->getName().str() << std::endl;
     ///////////////////////////////////////////////////////////////////////////
+    legacy::FunctionPassManager fpm(PtxToLlvmIrConverter::Module.get());    
+    fpm.add(createPromoteMemoryToRegisterPass());
+    fpm.add(createLoopRotatePass());
 
-    fam.registerPass([&] { return DominatorTreeAnalysis(); });
-    LoopInfo loopInfo;
-    loopInfo.analyze(fam.getResult<DominatorTreeAnalysis>(*kernel));
+    fpm.doInitialization();
+    fpm.run(*kernel);
+    fpm.doFinalization();
+
+    DominatorTree dt(*kernel);
+    TargetLibraryInfoImpl tlii;
+    TargetLibraryInfo tli(tlii);
+    AssumptionCache ac(*kernel);
+    LoopInfo loopInfo(dt);
+    llvm::ScalarEvolution se(*kernel, tli, ac, dt, loopInfo);
+
+    outs() << "\n";
+    kernel->print(outs());
+
     for (BasicBlock &bb : *kernel) {
         Loop* loop = loopInfo.getLoopFor(&bb);
-        if (loop)
-            loop->print(outs());
-        // Loop::LoopBounds bounds = loops[0]->getBounds();
-        // std::cout << "OK" << std::endl;
+        if (!loop) continue;
+
+        outs() << "\n";
+        loop->print(outs());
+        outs() << "\n";
+
+        PHINode* phi = loop->getCanonicalInductionVariable();
+        if (phi) {
+            outs() << "\ncan ind: \n";
+            phi->print(outs());
+        }
+
+        PHINode* ind = loop->getInductionVariable(se);
+        if (ind) {
+            outs() << "\nind: \n";
+            ind->print(outs());
+        }
+
+        std::optional<llvm::Loop::LoopBounds> bounds = loop->getBounds(se);
+        if (bounds == std::nullopt) continue;
+        outs() << "\nInitial Value: \n";
+        if (dyn_cast<ConstantInt>(&bounds->getInitialIVValue()))
+            dyn_cast<ConstantInt>(&bounds->getInitialIVValue())->print(outs());
+        else
+            outs() << (&bounds->getInitialIVValue())->getName().str() << "\n";
+        outs() << "\nFinal Value: \n";
+        if (dyn_cast<ConstantInt>(&bounds->getFinalIVValue()))
+            dyn_cast<ConstantInt>(&bounds->getFinalIVValue())->print(outs());
+        else
+            outs() << (&bounds->getFinalIVValue())->getName().str() << "\n";
 
     }
     // std::vector<Loop*> loops = loopInfo.getTopLevelLoops();
     // if (loops.size() > 0) {
     //     loops[0]->print(outs());
     // }
-    
 }
