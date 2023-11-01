@@ -52,6 +52,13 @@ class InstrStatement : public Statement {
         uint sourceOpNum
     );
 
+    // Create a phi node in the beginning of the current block and add
+    // an incoming value from the previous block
+    llvm::PHINode* CreatePhiInBlockStart(
+        llvm::Value* value,
+        llvm::BasicBlock* currBasicBlock
+    );
+
 public:
     InstrStatement(
         unsigned int id,

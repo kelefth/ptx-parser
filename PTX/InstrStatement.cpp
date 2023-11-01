@@ -335,6 +335,30 @@ InstrStatement* InstrStatement::GetOperandWriteInstruction(
     return userInst;
 }
 
+llvm::PHINode* InstrStatement::CreatePhiInBlockStart(
+    llvm::Value* value,
+    llvm::BasicBlock* currBasicBlock
+) {
+
+    llvm::PHINode* phi = llvm::PHINode::Create(
+        llvm::Type::getInt32Ty(*PtxToLlvmIrConverter::Context),
+        2,
+        "",
+        &*currBasicBlock->getFirstInsertionPt()
+    );
+
+    // find previous block
+    llvm::BasicBlock* prevBb = nullptr;
+    for (llvm::BasicBlock &bb : *currBasicBlock->getParent()) {
+        if (&bb == currBasicBlock) break;
+        prevBb = &bb;
+    }
+
+    phi->addIncoming(value, prevBb);
+
+    return phi;
+}
+
 void InstrStatement::ToLlvmIr() {
     std::vector<llvm::Value*> genLlvmInstructions;
 
@@ -734,10 +758,35 @@ void InstrStatement::ToLlvmIr() {
         if (firstOperandValue == nullptr || secondOperandValue == nullptr)
             return;
 
-        llvm::Value* add = PtxToLlvmIrConverter::Builder->CreateAdd(
-            firstOperandValue,
-            secondOperandValue
+        // Check if destination and source registers are the same (possible
+        // induction variable), if yes create phi node in the beginning of this
+        // basic block
+        llvm::Value* add = nullptr;
+        std::string firstSourceOpName = std::get<std::string>(
+            SourceOps[0]->getValue()
         );
+        std::string destName = std::get<std::string>(DestOps[0]->getValue());
+        if (destName == firstSourceOpName) {
+            llvm::BasicBlock* currBasicBlock
+                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::PHINode* phi = CreatePhiInBlockStart(
+                firstOperandValue,
+                currBasicBlock
+            );
+
+            add = PtxToLlvmIrConverter::Builder->CreateAdd(
+                phi,
+                secondOperandValue
+            );
+            phi->addIncoming(add, currBasicBlock);
+        }
+        else {
+            add = PtxToLlvmIrConverter::Builder->CreateAdd(
+                firstOperandValue,
+                secondOperandValue
+            );
+        }
 
         genLlvmInstructions.push_back(add);
 
@@ -905,10 +954,34 @@ void InstrStatement::ToLlvmIr() {
         if (firstOperandValue == nullptr || secondOperandValue == nullptr)
             return;
 
-        llvm::Value* sub = PtxToLlvmIrConverter::Builder->CreateSub(
-            firstOperandValue,
-            secondOperandValue
+        // Create phi node for possible induction variable, if the source
+        // and dest registers are the same
+        llvm::Value* sub = nullptr;
+        std::string firstSourceOpName = std::get<std::string>(
+            SourceOps[0]->getValue()
         );
+        std::string destName = std::get<std::string>(DestOps[0]->getValue());
+        if (destName == firstSourceOpName) {
+            llvm::BasicBlock* currBasicBlock
+                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::PHINode* phi = CreatePhiInBlockStart(
+                firstOperandValue,
+                currBasicBlock
+            );
+
+            sub = PtxToLlvmIrConverter::Builder->CreateAdd(
+                phi,
+                secondOperandValue
+            );
+            phi->addIncoming(sub, currBasicBlock);
+        }
+        else {
+            sub = PtxToLlvmIrConverter::Builder->CreateSub(
+                firstOperandValue,
+                secondOperandValue
+            );
+        }
 
         genLlvmInstructions.push_back(sub);
     }
@@ -919,10 +992,34 @@ void InstrStatement::ToLlvmIr() {
         if (firstOperandValue == nullptr || secondOperandValue == nullptr)
             return;
 
-        llvm::Value* mul = PtxToLlvmIrConverter::Builder->CreateMul(
-            firstOperandValue,
-            secondOperandValue
+        // Create phi node for possible induction variable, if the source
+        // and dest registers are the same
+        llvm::Value* mul = nullptr;
+        std::string firstSourceOpName = std::get<std::string>(
+            SourceOps[0]->getValue()
         );
+        std::string destName = std::get<std::string>(DestOps[0]->getValue());
+        if (destName == firstSourceOpName) {
+            llvm::BasicBlock* currBasicBlock
+                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::PHINode* phi = CreatePhiInBlockStart(
+                firstOperandValue,
+                currBasicBlock
+            );
+
+            mul = PtxToLlvmIrConverter::Builder->CreateAdd(
+                phi,
+                secondOperandValue
+            );
+            phi->addIncoming(mul, currBasicBlock);
+        }
+        else {
+            mul = PtxToLlvmIrConverter::Builder->CreateMul(
+                firstOperandValue,
+                secondOperandValue
+            );
+        }
 
         genLlvmInstructions.push_back(mul);
     }
