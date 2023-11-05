@@ -42,8 +42,8 @@ class InstrStatement : public Statement {
 
     std::unique_ptr<KernelDirectStatement> GetCurrentKernel();
 
-    // Check if label "name" is a global variable and return it
-    LinkingDirectStatement* GetGlobalVar(std::string name);
+    // Check if label "name" is a variable and return it
+    DirectStatement* GetVar(std::string name);
 
     // Find and return the last instruction before inst, where the source
     // operand at sourceOpNum was modified

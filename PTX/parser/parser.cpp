@@ -9,6 +9,7 @@
 #include "../ParamDirectStatement.h"
 #include "../KernelDirectStatement.h"
 #include "../LinkingDirectStatement.h"
+#include "../VarDecDirectStatement.h"
 #include "../Operand.h"
 
 #include "llvm/Pass.h"
@@ -36,6 +37,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/Support/raw_ostream.h"
 
 //////////////////////////////////////////////////////////////////////////////
 // #include "llvm/IRReader/IRReader.h"
@@ -397,65 +399,74 @@ void ParseInstrStatement() {
 
 }
 
-// void ParseDirectStatement() {
+void ParseVarDecDirectStatement() {
+    int prevToken;
+    std::string directive = "";
+    std::string addressSpace = "";
+    std::string identifier = "";
+    std::string type = "";
+    std::string label = "";
+    int alignment = 0;
+    int size = 0;
+    bool isArray = false;
 
-//     std::string label = "";
-//     std::string type = "";
-//     std::vector<std::string> directives;
-//     std::vector<std::string> arguments;
-//     std::vector<std::unique_ptr<Statement>> incStatements;
+    while (currentToken != token_semicolon) {
+        switch (currentToken) {
+            case token_label:
+                label = currStrVal;
+                break;
+            case token_global_dir:
+            case token_shared_dir:
+            case token_local_dir:
+                addressSpace = currStrVal.erase(0,1);
+                directive = addressSpace;
+                break;
+            case token_type:
+                type = currStrVal;
+                break;
+            case token_id:
+                identifier = currStrVal;
+                break;
+            case token_number:
+                if (prevToken == token_align_dir)
+                    alignment = currNumVal;
+                else if (isArray)
+                    size = currNumVal;
+            case token_leftbracket:
+                isArray = true;
+                break;
+            case token_rightbracket:
+                isArray = false;
+                break;
+            default:
+                break;
+        }
 
-//     bool isFunctionEntryDirective = false;
-//     bool isParamDirective = false;
+        prevToken = currentToken;
+        currentToken = getToken();
+    }
 
-//     while (currentToken != token_semicolon) {
-//         bool isParamDirectiveEnd = false;
+    auto lastKernelStmtPtr = std::find_if(statements.rbegin(), statements.rend(),
+                                        [](const std::shared_ptr<Statement>& stmt) {
+                                            return dynamic_cast<const KernelDirectStatement*>(stmt.get()) != nullptr;
+                                        });
 
-//         // Check cases that directive statements end
-//         if(
-//             (isFunctionEntryDirective && currentToken == token_leftparenth) ||
-//             (currentToken == token_newline)
-//         ) {
-//             break;
-//         }
-
-//         switch (currentToken) {
-//             case token_label:
-//                     label = currStrVal;
-//                     break;
-//             case token_direct:
-//                 if (currStrVal == "entry" || currStrVal == "func")
-//                     isFunctionEntryDirective = true;
-//                 else if (currStrVal == "param")
-//                     isParamDirective = true;
-
-//                 directives.push_back(currStrVal);
-
-//                 break;
-//             case token_type:
-//                 type = currStrVal;
-//                 break;
-//             case token_reg:
-//                 arguments.push_back(currStrVal);
-//             case token_number:
-//                 arguments.push_back(std::to_string(currNumVal));
-//             case token_id:
-//                 arguments.push_back(currStrVal);
-
-//                 if (isParamDirective) isParamDirectiveEnd = true;
-
-//                 break;
-//             default:
-//                 break;
-//         }
-
-//         if (isParamDirectiveEnd) break;
-
-//         currentToken = getToken();
-//     }
-
-//     statements.push_back(std::make_unique<DirectStatement>(label, directives, type, arguments, std::move(incStatements)));
-// }
+    KernelDirectStatement* kernelStmtPtr = static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get());
+    unsigned int kernelId = kernelStmtPtr->getId();
+    kernelStmtPtr->AddBodyStatement(
+        std::make_shared<VarDecDirectStatement>(
+            IdCounter++,
+            label,
+            directive,
+            addressSpace,
+            alignment,
+            type,
+            identifier,
+            size
+        )
+    );
+    
+}
 
 void ParseModuleDirectStatement() {
 
@@ -631,10 +642,6 @@ void dump_statements() {
 
 Instruction* FindMulInUses(llvm::iterator_range<llvm::Value::use_iterator> uses) {
     for (llvm::Use &use : uses) {
-        // std::cout << std::endl;
-        // use.get()->print(llvm::outs(), true);
-        // std::cout << std::endl;
-
         Instruction* useInst = cast<Instruction>(use.get());
         std::string instName = useInst->getOpcodeName();
         if (instName == "mul") return useInst;
@@ -644,6 +651,38 @@ Instruction* FindMulInUses(llvm::iterator_range<llvm::Value::use_iterator> uses)
     }
 
     return nullptr;
+}
+
+// Value* FindValueLeaf(Value* value) {
+//     Instruction* valueInst = dyn_cast<Instruction>(value);
+//     if (!valueInst) return value;
+
+//     for (Use &use : value->uses()) {
+        
+//     }
+// }
+
+std::string UnfoldValue(Value* value) {
+    Instruction* valueInst = dyn_cast<Instruction>(value);
+    std::string unfoldedStr = "";
+    raw_string_ostream stream(unfoldedStr);
+    if (!valueInst) {
+        value->print(stream);
+        return stream.str();
+    }
+
+    std::string opcode = valueInst->getOpcodeName();
+    unfoldedStr = "(" + opcode;
+
+    uint operandNum = valueInst->getNumOperands();
+    for (uint i = 0; i < operandNum; ++i) {
+        unfoldedStr += " " + UnfoldValue(valueInst->getOperand(i));
+        if (i < operandNum - 1) unfoldedStr += ",";
+    }
+    unfoldedStr += ")";
+
+    return unfoldedStr;
+    
 }
 
 int main() {
@@ -667,6 +706,13 @@ int main() {
         ) {
             ParseLinkingDirectStatemnt();
         }
+        else if (
+            currentToken == token_local_dir     ||
+            currentToken == token_shared_dir    ||
+            currentToken == token_global_dir
+        ) {
+            ParseVarDecDirectStatement();
+        }
 
         currentToken = getToken();
     }
@@ -679,6 +725,9 @@ int main() {
 
     Module::FunctionListType &funcList =
         PtxToLlvmIrConverter::Module->getFunctionList();
+        
+    PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
+    // dump_statements();
 
     // Apply modifications to the IR to fix errors
     for (Function &func : funcList) {
@@ -692,6 +741,7 @@ int main() {
             if (currInst->getNumOperands() == 0) continue;
 
             llvm::Value* firstOperand = currInst->getOperand(0);
+            if (firstOperand == nullptr) currInst->print(outs());
             Type::TypeID firstOperandTypeId = firstOperand->getType()->getTypeID();
 
             if ((currInstName != "add") || (firstOperandTypeId != Type::PointerTyID))
@@ -777,6 +827,8 @@ int main() {
     // Function* function = &Mod->getFunctionList().front();
     // std::cout << function->getName().str() << std::endl;
     ///////////////////////////////////////////////////////////////////////////
+
+    // Apply passes and get loop bounds
     legacy::FunctionPassManager fpm(PtxToLlvmIrConverter::Module.get());    
     fpm.add(createPromoteMemoryToRegisterPass());
     fpm.add(createLoopRotatePass());
@@ -795,6 +847,7 @@ int main() {
     outs() << "\n";
     kernel->print(outs());
 
+    std::vector<std::string> constraints;
     for (BasicBlock &bb : *kernel) {
         Loop* loop = loopInfo.getLoopFor(&bb);
         if (!loop) continue;
@@ -803,34 +856,59 @@ int main() {
         loop->print(outs());
         outs() << "\n";
 
-        PHINode* phi = loop->getCanonicalInductionVariable();
-        if (phi) {
-            outs() << "\ncan ind: \n";
-            phi->print(outs());
-        }
+        // PHINode* phi = loop->getCanonicalInductionVariable();
+        // if (phi) {
+        //     outs() << "\ncan ind: \n";
+        //     phi->print(outs());
+        // }
 
-        PHINode* ind = loop->getInductionVariable(se);
-        if (ind) {
-            outs() << "\nind: \n";
-            ind->print(outs());
-        }
+        // PHINode* ind = loop->getInductionVariable(se);
+        // if (ind) {
+        //     outs() << "\nind: \n";
+        //     ind->print(outs());
+        // }
 
         std::optional<llvm::Loop::LoopBounds> bounds = loop->getBounds(se);
         if (bounds == std::nullopt) continue;
-        outs() << "\nInitial Value: \n";
-        if (dyn_cast<ConstantInt>(&bounds->getInitialIVValue()))
-            dyn_cast<ConstantInt>(&bounds->getInitialIVValue())->print(outs());
-        else
-            outs() << (&bounds->getInitialIVValue())->getName().str() << "\n";
-        outs() << "\nFinal Value: \n";
-        if (dyn_cast<ConstantInt>(&bounds->getFinalIVValue()))
-            dyn_cast<ConstantInt>(&bounds->getFinalIVValue())->print(outs());
-        else
-            outs() << (&bounds->getFinalIVValue())->getName().str() << "\n";
+        Value* initialValue = &bounds->getInitialIVValue();
+        Value* finalValue = &bounds->getFinalIVValue();
+        std::string initialValueStr = UnfoldValue(initialValue);
+        std::string finalValueStr = UnfoldValue(finalValue);
+
+        Loop::LoopBounds::Direction loopDirection = bounds->getDirection();
+
+        // outs() << "\nInitial Value: \n";
+        // initialValue->print(outs());
+        // outs() << "\n";
+        // outs() << initialValueStr << "\n";
+        // outs() << "\nFinal Value: \n";
+        // outs() << finalValueStr << "\n";
+        // outs() << "\n";
+
+        std::string constraint;
+        if (loopDirection == Loop::LoopBounds::Direction::Increasing)
+            constraint = initialValueStr + " < i < " + finalValueStr;
+        if (loopDirection == Loop::LoopBounds::Direction::Decreasing)
+            constraint = finalValueStr + " < i < " + initialValueStr;
+        
+        constraints.push_back(constraint);
+        // if (dyn_cast<ConstantInt>(&bounds->getInitialIVValue()))
+        //     dyn_cast<ConstantInt>(&bounds->getInitialIVValue())->print(outs());
+        // else
+        //     outs() << (&bounds->getInitialIVValue())->getName().str() << "\n";
+        // if (dyn_cast<ConstantInt>(&bounds->getFinalIVValue()))
+        //     dyn_cast<ConstantInt>(&bounds->getFinalIVValue())->print(outs());
+        // else
+        //     outs() << (&bounds->getFinalIVValue())->getName().str() << "\n";
 
     }
     // std::vector<Loop*> loops = loopInfo.getTopLevelLoops();
     // if (loops.size() > 0) {
     //     loops[0]->print(outs());
     // }
+
+    outs() << "\n" << "Constraints:" << "\n\t";
+    for (std::string constraint : constraints)
+        outs() << constraint << "\n\t";
+    outs() << "\n";
 }
