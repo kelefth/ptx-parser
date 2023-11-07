@@ -640,14 +640,23 @@ void dump_statements() {
     }
 }
 
-Instruction* FindMulInUses(llvm::iterator_range<llvm::Value::use_iterator> uses) {
+Instruction* FindMulShlInUses(
+    llvm::iterator_range<llvm::Value::use_iterator> uses
+) {
     for (llvm::Use &use : uses) {
-        Instruction* useInst = cast<Instruction>(use.get());
-        std::string instName = useInst->getOpcodeName();
-        if (instName == "mul") return useInst;
+        Instruction* useInst = dyn_cast<Instruction>(use.get());
+
+        if (useInst == nullptr) continue;
+        
+        uint instOpcode = useInst->getOpcode();
+        if (
+            (instOpcode == Instruction::Mul || instOpcode == Instruction::Shl) &&
+            dyn_cast<ConstantInt>(useInst->getOperand(1)) != nullptr
+        )
+            return useInst;
 
         if (useInst->getNumOperands() > 0)
-            return FindMulInUses(useInst->getOperand(0)->uses());
+            return FindMulShlInUses(useInst->getOperand(0)->uses());
     }
 
     return nullptr;
@@ -731,30 +740,35 @@ int main() {
 
     // Apply modifications to the IR to fix errors
     for (Function &func : funcList) {
+        // Replace mul/shl and add instruction with pointers as operands
+        // with gep instructions
         inst_iterator instIt = inst_begin(func);
         inst_iterator endIt = inst_end(func);
+        // store instructions in this vector to remove them after the iteration
+        std::vector<Instruction*> instsToRemove;
         for (instIt, endIt; instIt != endIt; ++instIt) {
             Instruction* currInst = &*instIt;
             if (currInst == nullptr) continue;
-            std::string currInstName = currInst->getOpcodeName();
+            uint currInstOpcode = currInst->getOpcode();
 
             if (currInst->getNumOperands() == 0) continue;
 
             llvm::Value* firstOperand = currInst->getOperand(0);
-            if (firstOperand == nullptr) currInst->print(outs());
             Type::TypeID firstOperandTypeId = firstOperand->getType()->getTypeID();
 
-            if ((currInstName != "add") || (firstOperandTypeId != Type::PointerTyID))
-                continue;
+            if (
+                (currInstOpcode != Instruction::Add) || 
+                (firstOperandTypeId != Type::PointerTyID)
+            )  continue;
 
             llvm::Value* secondOperand = currInst->getOperand(1);
 
             // remove previous mul instruction
             llvm::iterator_range<llvm::Value::use_iterator> uses = secondOperand->uses();
-            Instruction* mul = FindMulInUses(uses);
+            Instruction* mul = FindMulShlInUses(uses);
             if (mul) {
                 mul->replaceAllUsesWith(mul->getOperand(0));
-                mul->eraseFromParent();
+                instsToRemove.push_back(mul);
             }
 
             // TODO: fix other types
@@ -762,7 +776,7 @@ int main() {
                 *PtxToLlvmIrConverter::Context
             );
 
-            Value* index = secondOperand;
+            Value* index = currInst->getOperand(1);
             Value* indexList[] = { index };
             GetElementPtrInst* gep = GetElementPtrInst::Create(
                 pointeeType,
@@ -772,12 +786,14 @@ int main() {
                 currInst
             );
             
-            // replace use of add, increase the iterator to point to the gep
-            // instruction and erase the add instruction
+            // replace use of the add instruction and erase it
             currInst->replaceAllUsesWith(gep);
-            instIt++;
-            currInst->eraseFromParent();
+            instsToRemove.push_back(currInst);
         }
+
+        // remove the instructions
+        for (Instruction* inst : instsToRemove)
+            inst->eraseFromParent();
 
         // Iterate through all basic blocks and add a branch instrution
         // if there is no terminator instruction already
@@ -843,9 +859,6 @@ int main() {
     AssumptionCache ac(*kernel);
     LoopInfo loopInfo(dt);
     llvm::ScalarEvolution se(*kernel, tli, ac, dt, loopInfo);
-
-    outs() << "\n";
-    kernel->print(outs());
 
     std::vector<std::string> constraints;
     for (BasicBlock &bb : *kernel) {
