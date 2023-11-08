@@ -957,6 +957,14 @@ void InstrStatement::ToLlvmIr() {
                                 uint globVarAddrSpace =
                                     globVarLlvmValue->getAddressSpace();
 
+                                int alignment;
+                                if (
+                                    llvm::GlobalVariable* globVar =
+                                        llvm::dyn_cast<llvm::GlobalVariable>(globVarLlvmValue)
+                                ) {
+                                    alignment = globVar->getAlignment();
+                                }
+
                                 // globVarLlvmValue->replaceAllUsesWith(
                                 //     newGlobalVarValue
                                 // );
@@ -968,12 +976,15 @@ void InstrStatement::ToLlvmIr() {
                                         newType,
                                         false,
                                         globVarLinkage,
-                                        nullptr,
+                                        llvm::Constant::getNullValue(newType),
                                         globVarName,
                                         nullptr,
                                         globVartlm,
                                         globVarAddrSpace
                                     );
+                                newGlobalVarValue->setAlignment(
+                                    llvm::MaybeAlign(alignment)
+                                );
 
                                 std::vector<llvm::Value*> newLlvmInstValueMap;
                                 newLlvmInstValueMap.push_back(newGlobalVarValue);
@@ -1130,6 +1141,35 @@ void InstrStatement::ToLlvmIr() {
 
         genLlvmInstructions.push_back(mul);
         genLlvmInstructions.push_back(add);
+    }
+    else if (Inst == "fma") {
+        
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
+        llvm::FastMathFlags fmf;
+        fmf.setAllowContract();
+        llvm::Value* fmul = PtxToLlvmIrConverter::Builder->CreateFMul(
+            firstOperandValue,
+            secondOperandValue
+        );
+        llvm::cast<llvm::Instruction>(fmul)->setFastMathFlags(fmf);
+
+        llvm::Value* thirdOperandValue = GetLlvmOperandValue(SourceOps[2]);
+
+        if (thirdOperandValue == nullptr) return;
+
+        llvm::Value* fadd = PtxToLlvmIrConverter::Builder->CreateFAdd(
+            fmul,
+            thirdOperandValue
+        );
+        llvm::cast<llvm::Instruction>(fadd)->setFastMathFlags(fmf);
+
+        genLlvmInstructions.push_back(fmul);
+        genLlvmInstructions.push_back(fadd);
     }
     else if (Inst == "setp") {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
@@ -1304,12 +1344,14 @@ void InstrStatement::ToLlvmIr() {
 
             std::string ptxAddrSpace;
             int globVarSize;
+            int alignment;
             if (
                 LinkingDirectStatement* linkStmt =
                     dynamic_cast<LinkingDirectStatement*>(varStmt)
             ) {
                 ptxAddrSpace = linkStmt->getAddressSpace();
                 globVarSize = linkStmt->getSize();
+                globVarSize = linkStmt->getAlignment();
             }
             else if (
                 VarDecDirectStatement* varDecStmt =
@@ -1317,6 +1359,7 @@ void InstrStatement::ToLlvmIr() {
             ) {
                 ptxAddrSpace = varDecStmt->getAddressSpace();
                 globVarSize = varDecStmt->getSize();
+                alignment = varDecStmt->getAlignment();
             }
 
             uint addrSpace = PtxToLlvmIrConverter::ConvertPtxToLlvmAddrSpace(
@@ -1325,15 +1368,17 @@ void InstrStatement::ToLlvmIr() {
 
             // set global var's type
             if (globVarSize > 0) {
+                llvm::Type* globVarType = llvm::ArrayType::get(
+                    PtxToLlvmIrConverter::Builder->getVoidTy(),
+                    globVarSize
+                );
+
                 globVar = new llvm::GlobalVariable(
                     *PtxToLlvmIrConverter::Module,
-                    llvm::ArrayType::get(
-                        PtxToLlvmIrConverter::Builder->getVoidTy(),
-                        globVarSize
-                    ),
+                    globVarType,
                     false,
                     llvm::GlobalValue::LinkOnceODRLinkage,
-                    nullptr,
+                    llvm::Constant::getNullValue(globVarType),
                     value,
                     nullptr,
                     llvm::GlobalVariable::ThreadLocalMode::NotThreadLocal,
@@ -1341,18 +1386,22 @@ void InstrStatement::ToLlvmIr() {
                 );
             }
             else {
+                llvm::Type* globVarType =
+                    PtxToLlvmIrConverter::Builder->getVoidTy();
+
                 globVar = new llvm::GlobalVariable(
                     *PtxToLlvmIrConverter::Module,
-                    PtxToLlvmIrConverter::Builder->getVoidTy(),
+                    globVarType,
                     false,
                     llvm::GlobalValue::LinkOnceODRLinkage,
-                    nullptr,
+                    llvm::Constant::getNullValue(globVarType),
                     value,
                     nullptr,
                     llvm::GlobalVariable::ThreadLocalMode::NotThreadLocal,
                     addrSpace
                 );
             }
+            globVar->setAlignment(llvm::MaybeAlign(alignment));
 
             genLlvmInstructions.push_back(globVar);
         }
