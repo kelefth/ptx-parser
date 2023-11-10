@@ -735,7 +735,7 @@ int main() {
     Module::FunctionListType &funcList =
         PtxToLlvmIrConverter::Module->getFunctionList();
         
-    PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
+    // PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
     // dump_statements();
 
     // Apply modifications to the IR to fix errors
@@ -844,6 +844,68 @@ int main() {
     // std::cout << function->getName().str() << std::endl;
     ///////////////////////////////////////////////////////////////////////////
 
+    DominatorTree dt(*kernel);
+
+    // for (Function &func : funcList) {
+    //     outs() << "\n";
+    //     outs() << func.getName();
+    //     outs() << "\n\n";
+
+    //     inst_iterator instIt = inst_begin(func);
+    //     inst_iterator endIt = inst_end(func);
+    //     std::vector<Instruction*> instsToRemove;
+    //     for (instIt, endIt; instIt != endIt; ++instIt) {
+    //         Instruction* currInst = &*instIt;
+    //         if (currInst->getOpcode() == Instruction::Store) {
+    //             outs() << currInst->getOpcodeName() << "\n";
+    //             Value* firstOperand = currInst->getOperand(0);
+    //             Instruction* firstOperandInst = dyn_cast<Instruction>(firstOperand);
+    //             if (!firstOperandInst) continue;
+    //             BasicBlock* firstOpBlock = firstOperandInst->getParent();
+    //             Type* firstOpType = firstOperand->getType();
+    //             // firstOperand->print(outs());
+    //             // outs() << "\n==========================\n";
+
+    //             BasicBlock* currBlock = currInst->getParent();
+    //             llvm::PHINode* phi = llvm::PHINode::Create(
+    //                 firstOpType,
+    //                 0,
+    //                 "",
+    //                 &*currBlock->getFirstInsertionPt()
+    //             );
+
+    //             phi->addIncoming(firstOperand, firstOpBlock);
+
+    //             Value* zeroValue;
+    //             if (firstOpType->isIntegerTy())
+    //                 zeroValue = ConstantInt::get(firstOpType, 0);
+    //             else
+    //                 zeroValue = ConstantFP::get(firstOpType, 0);
+
+    //             bool instDominatesUser = dt.dominates(firstOperand, currInst);
+    //             if(!instDominatesUser) {
+    //                 for (llvm::pred_iterator pred = llvm::pred_begin(currBlock), E = llvm::pred_end(currBlock); pred != E; ++pred) {
+    //                     (*pred)->print(outs());
+    //                     phi->addIncoming(zeroValue, *pred);
+    //                 }
+    //                 currInst->setOperand(0, phi);
+    //                 // outs() << "////////////////// ";
+    //                 // firstOperand->print(outs());
+    //                 // outs() << " does not dominate ";
+    //                 // currInst->print(outs());
+    //                 // outs() << " //////////////////\n";
+    //             }
+    //         }
+    //     }
+    // }
+
+    // PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
+
+    // outs() << "=============================\nVerification Results:\n";
+    // verifyFunction(*kernel, errStream);
+    // verifyModule(*PtxToLlvmIrConverter::Module, errStream);
+    // outs() << "=============================\n";
+
     // Apply passes and get loop bounds
     legacy::FunctionPassManager fpm(PtxToLlvmIrConverter::Module.get());    
     fpm.add(createPromoteMemoryToRegisterPass());
@@ -853,7 +915,6 @@ int main() {
     fpm.run(*kernel);
     fpm.doFinalization();
 
-    DominatorTree dt(*kernel);
     TargetLibraryInfoImpl tlii;
     TargetLibraryInfo tli(tlii);
     AssumptionCache ac(*kernel);
@@ -865,21 +926,9 @@ int main() {
         Loop* loop = loopInfo.getLoopFor(&bb);
         if (!loop) continue;
 
-        outs() << "\n";
-        loop->print(outs());
-        outs() << "\n";
-
-        // PHINode* phi = loop->getCanonicalInductionVariable();
-        // if (phi) {
-        //     outs() << "\ncan ind: \n";
-        //     phi->print(outs());
-        // }
-
-        // PHINode* ind = loop->getInductionVariable(se);
-        // if (ind) {
-        //     outs() << "\nind: \n";
-        //     ind->print(outs());
-        // }
+        // outs() << "\n";
+        // loop->print(outs());
+        // outs() << "\n";
 
         std::optional<llvm::Loop::LoopBounds> bounds = loop->getBounds(se);
         if (bounds == std::nullopt) continue;
@@ -890,14 +939,6 @@ int main() {
 
         Loop::LoopBounds::Direction loopDirection = bounds->getDirection();
 
-        // outs() << "\nInitial Value: \n";
-        // initialValue->print(outs());
-        // outs() << "\n";
-        // outs() << initialValueStr << "\n";
-        // outs() << "\nFinal Value: \n";
-        // outs() << finalValueStr << "\n";
-        // outs() << "\n";
-
         std::string constraint;
         if (loopDirection == Loop::LoopBounds::Direction::Increasing)
             constraint = initialValueStr + " < i < " + finalValueStr;
@@ -905,23 +946,14 @@ int main() {
             constraint = finalValueStr + " < i < " + initialValueStr;
         
         constraints.push_back(constraint);
-        // if (dyn_cast<ConstantInt>(&bounds->getInitialIVValue()))
-        //     dyn_cast<ConstantInt>(&bounds->getInitialIVValue())->print(outs());
-        // else
-        //     outs() << (&bounds->getInitialIVValue())->getName().str() << "\n";
-        // if (dyn_cast<ConstantInt>(&bounds->getFinalIVValue()))
-        //     dyn_cast<ConstantInt>(&bounds->getFinalIVValue())->print(outs());
-        // else
-        //     outs() << (&bounds->getFinalIVValue())->getName().str() << "\n";
-
     }
     // std::vector<Loop*> loops = loopInfo.getTopLevelLoops();
     // if (loops.size() > 0) {
     //     loops[0]->print(outs());
     // }
 
-    outs() << "\n" << "Constraints:" << "\n\t";
-    for (std::string constraint : constraints)
-        outs() << constraint << "\n\t";
-    outs() << "\n";
+    // outs() << "\n" << "Constraints:" << "\n\t";
+    // for (std::string constraint : constraints)
+    //     outs() << constraint << "\n\t";
+    // outs() << "\n";
 }
