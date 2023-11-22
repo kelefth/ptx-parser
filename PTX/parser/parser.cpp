@@ -739,7 +739,9 @@ int main() {
     // dump_statements();
 
     // Apply modifications to the IR to fix errors
+    DominatorTree* dt;
     for (Function &func : funcList) {
+        if (func.isDeclaration()) continue;
         // Replace mul/shl and add instruction with pointers as operands
         // with gep instructions
         inst_iterator instIt = inst_begin(func);
@@ -794,36 +796,34 @@ int main() {
         // remove the instructions
         for (Instruction* inst : instsToRemove)
             inst->eraseFromParent();
-
-        // Iterate through all basic blocks and add a branch instrution
-        // if there is no terminator instruction already
-        for (auto bbIt = func.begin(); bbIt != func.end(); ++bbIt) {
-            BasicBlock &bb = *bbIt;
-
-            if (bb.getTerminator()) continue;
-
-            auto bbItNext = std::next(bbIt);
-            if (bbItNext != func.end()) {
-                BasicBlock &nextBb = *bbItNext;
-                BranchInst* br = BranchInst::Create(&nextBb, &bb);
-            }
-        }
-
     }
 
+    // Verification
+
     PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
+
+    raw_ostream* errStream = &errs();
+    for (Function &func : funcList) {
+        if (func.isDeclaration()) continue;
+        std::string funcName = func.getName().str();
+        outs() << "=============================\n"
+               << funcName
+               << " Verification Results:\n";
+        verifyFunction(func, errStream);
+        verifyModule(*PtxToLlvmIrConverter::Module, errStream);
+        outs() << "=============================\n";
+    }
+
+    // PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
 
     // dump_statements();
 
     // Analysis
-    Function* kernel =  &funcList.front();
-    std::string kernelName = kernel->getName().str();
 
-    std::cout << "=============================\nVerification Results:" << std::endl;
-    raw_ostream* errStream = &errs();
-    verifyFunction(*kernel, errStream);
-    verifyModule(*PtxToLlvmIrConverter::Module, errStream);
-    std::cout << "=============================" << std::endl;
+    // std::cout << "=============================\nVerification Results:" << std::endl;
+    // verifyFunction(*kernel, errStream);
+    // verifyModule(*PtxToLlvmIrConverter::Module, errStream);
+    // std::cout << "=============================" << std::endl;
 
     ///////////////////////////////////////////////////////////////////////////
     // static LLVMContext TheContext;
@@ -844,116 +844,59 @@ int main() {
     // std::cout << function->getName().str() << std::endl;
     ///////////////////////////////////////////////////////////////////////////
 
-    DominatorTree dt(*kernel);
-
-    // for (Function &func : funcList) {
-    //     outs() << "\n";
-    //     outs() << func.getName();
-    //     outs() << "\n\n";
-
-    //     inst_iterator instIt = inst_begin(func);
-    //     inst_iterator endIt = inst_end(func);
-    //     std::vector<Instruction*> instsToRemove;
-    //     for (instIt, endIt; instIt != endIt; ++instIt) {
-    //         Instruction* currInst = &*instIt;
-    //         if (currInst->getOpcode() == Instruction::Store) {
-    //             outs() << currInst->getOpcodeName() << "\n";
-    //             Value* firstOperand = currInst->getOperand(0);
-    //             Instruction* firstOperandInst = dyn_cast<Instruction>(firstOperand);
-    //             if (!firstOperandInst) continue;
-    //             BasicBlock* firstOpBlock = firstOperandInst->getParent();
-    //             Type* firstOpType = firstOperand->getType();
-    //             // firstOperand->print(outs());
-    //             // outs() << "\n==========================\n";
-
-    //             BasicBlock* currBlock = currInst->getParent();
-    //             llvm::PHINode* phi = llvm::PHINode::Create(
-    //                 firstOpType,
-    //                 0,
-    //                 "",
-    //                 &*currBlock->getFirstInsertionPt()
-    //             );
-
-    //             phi->addIncoming(firstOperand, firstOpBlock);
-
-    //             Value* zeroValue;
-    //             if (firstOpType->isIntegerTy())
-    //                 zeroValue = ConstantInt::get(firstOpType, 0);
-    //             else
-    //                 zeroValue = ConstantFP::get(firstOpType, 0);
-
-    //             bool instDominatesUser = dt.dominates(firstOperand, currInst);
-    //             if(!instDominatesUser) {
-    //                 for (llvm::pred_iterator pred = llvm::pred_begin(currBlock), E = llvm::pred_end(currBlock); pred != E; ++pred) {
-    //                     (*pred)->print(outs());
-    //                     phi->addIncoming(zeroValue, *pred);
-    //                 }
-    //                 currInst->setOperand(0, phi);
-    //                 // outs() << "////////////////// ";
-    //                 // firstOperand->print(outs());
-    //                 // outs() << " does not dominate ";
-    //                 // currInst->print(outs());
-    //                 // outs() << " //////////////////\n";
-    //             }
-    //         }
-    //     }
-    // }
-
-    // PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
-
-    // outs() << "=============================\nVerification Results:\n";
-    // verifyFunction(*kernel, errStream);
-    // verifyModule(*PtxToLlvmIrConverter::Module, errStream);
-    // outs() << "=============================\n";
-
     // Apply passes and get loop bounds
     legacy::FunctionPassManager fpm(PtxToLlvmIrConverter::Module.get());    
     fpm.add(createPromoteMemoryToRegisterPass());
     fpm.add(createLoopRotatePass());
 
-    fpm.doInitialization();
-    fpm.run(*kernel);
-    fpm.doFinalization();
+    for (Function &func : funcList) {
+        if (func.isDeclaration()) continue;
 
-    TargetLibraryInfoImpl tlii;
-    TargetLibraryInfo tli(tlii);
-    AssumptionCache ac(*kernel);
-    LoopInfo loopInfo(dt);
-    llvm::ScalarEvolution se(*kernel, tli, ac, dt, loopInfo);
+        fpm.doInitialization();
+        fpm.run(func);
+        fpm.doFinalization();
 
-    std::vector<std::string> constraints;
-    for (BasicBlock &bb : *kernel) {
-        Loop* loop = loopInfo.getLoopFor(&bb);
-        if (!loop) continue;
+        dt = new DominatorTree(func);
+        TargetLibraryInfoImpl tlii;
+        TargetLibraryInfo tli(tlii);
+        AssumptionCache ac(func);
+        LoopInfo loopInfo(*dt);
+        llvm::ScalarEvolution se(func, tli, ac, *dt, loopInfo);
 
+        std::vector<std::string> constraints;
+        for (BasicBlock &bb : func) {
+            Loop* loop = loopInfo.getLoopFor(&bb);
+            if (!loop) continue;
+
+            // outs() << "\n";
+            // loop->print(outs());
+            // outs() << "\n";
+
+            std::optional<llvm::Loop::LoopBounds> bounds = loop->getBounds(se);
+            if (bounds == std::nullopt) continue;
+            Value* initialValue = &bounds->getInitialIVValue();
+            Value* finalValue = &bounds->getFinalIVValue();
+            std::string initialValueStr = UnfoldValue(initialValue);
+            std::string finalValueStr = UnfoldValue(finalValue);
+
+            Loop::LoopBounds::Direction loopDirection = bounds->getDirection();
+
+            std::string constraint;
+            if (loopDirection == Loop::LoopBounds::Direction::Increasing)
+                constraint = initialValueStr + " < i < " + finalValueStr;
+            if (loopDirection == Loop::LoopBounds::Direction::Decreasing)
+                constraint = finalValueStr + " < i < " + initialValueStr;
+            
+            constraints.push_back(constraint);
+        }
+        // std::vector<Loop*> loops = loopInfo.getTopLevelLoops();
+        // if (loops.size() > 0) {
+        //     loops[0]->print(outs());
+        // }
+        // std::string funcName = func.getName().str();
+        // outs() << "\n" << funcName << " Constraints:" << "\n\t";
+        // for (std::string constraint : constraints)
+        //     outs() << constraint << "\n\t";
         // outs() << "\n";
-        // loop->print(outs());
-        // outs() << "\n";
-
-        std::optional<llvm::Loop::LoopBounds> bounds = loop->getBounds(se);
-        if (bounds == std::nullopt) continue;
-        Value* initialValue = &bounds->getInitialIVValue();
-        Value* finalValue = &bounds->getFinalIVValue();
-        std::string initialValueStr = UnfoldValue(initialValue);
-        std::string finalValueStr = UnfoldValue(finalValue);
-
-        Loop::LoopBounds::Direction loopDirection = bounds->getDirection();
-
-        std::string constraint;
-        if (loopDirection == Loop::LoopBounds::Direction::Increasing)
-            constraint = initialValueStr + " < i < " + finalValueStr;
-        if (loopDirection == Loop::LoopBounds::Direction::Decreasing)
-            constraint = finalValueStr + " < i < " + initialValueStr;
-        
-        constraints.push_back(constraint);
     }
-    // std::vector<Loop*> loops = loopInfo.getTopLevelLoops();
-    // if (loops.size() > 0) {
-    //     loops[0]->print(outs());
-    // }
-
-    // outs() << "\n" << "Constraints:" << "\n\t";
-    // for (std::string constraint : constraints)
-    //     outs() << constraint << "\n\t";
-    // outs() << "\n";
 }

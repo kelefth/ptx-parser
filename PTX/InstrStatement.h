@@ -27,27 +27,38 @@ class InstrStatement : public Statement {
 
     std::shared_ptr<Statement> GetStatementById(unsigned int id);
 
+    // Check if block needle is a predecessor of block haystack
+    bool isBlockInPredecessors(
+        llvm::BasicBlock* needle,
+        llvm::BasicBlock* haystack
+    );
+
     // Get source operand's value by getting the mapping
     // of the last instruction that used it as destination.
     // isComplex is used when the PTX instructions don't
     // have a direct mapping to LLVM instructions.
-    llvm::Value* GetLlvmRegisterValue(
-        std::string ptxOperandName,
-        bool isComplex
-    );
+    llvm::Value* GetLlvmRegisterValue(std::string ptxOperandName);
 
     llvm::Value* GetLlvmOperandValue(const std::unique_ptr<Operand>& operand);
 
-    llvm::Constant* GetImmediateValue(double value);
+    llvm::Constant* GetLlvmImmediateValue(double value);
 
     std::unique_ptr<KernelDirectStatement> GetCurrentKernel();
 
     // Check if label "name" is a variable and return it
     DirectStatement* GetVar(std::string name);
 
-    // Find and return the last instruction before inst, where the source
-    // operand at sourceOpNum was modified
-    InstrStatement* GetOperandWriteInstruction(
+    // Find and return the last instructions in each block before inst,
+    // where the source operand at sourceOpNum was modified
+    std::vector<uint> GetOperandWriteInstructionIds(
+        InstrStatement* inst,
+        uint sourceOpNum
+    );
+    std::vector<uint> GetOperandWriteInstructionIds(
+        std::string operandName
+    );
+
+    std::vector<InstrStatement*> GetOperandWriteInstructions(
         InstrStatement* inst,
         uint sourceOpNum
     );

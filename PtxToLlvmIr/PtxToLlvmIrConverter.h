@@ -33,11 +33,13 @@ class PtxToLlvmIrConverter {
 
     static const std::map<std::string, typeFunc> TypeMap;
 
-    // Map that holds conversion of PTX to LLVM instructions
-    static std::unordered_map<int, std::vector<llvm::Value*>>
-    PtxToLlvmMap;
+    // Map that holds conversion of PTX to LLVM instructions and the block in
+    // which they are inserted (needed for constants)
+    static std::unordered_map<
+        int, std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>>
+        PtxToLlvmMap;
 
-public:
+  public:
 
     static std::unique_ptr<llvm::LLVMContext> Context;
     static std::unique_ptr<llvm::IRBuilder<>> Builder;
@@ -46,12 +48,13 @@ public:
     static void Initialize();
 
     static typeFunc GetTypeMapping(std::string type);
-    static std::vector<llvm::Value*> getPtxToLlvmMapValue(
-        int stmtId
-    );
+
+    static std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>
+    getPtxToLlvmMapValue(int stmtId);
+
     static void setPtxToLlvmMapValue(
         int stmtId,
-        std::vector<llvm::Value*> val
+        std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> val
     );
     static void removePtxToLlvmMapValue(int stmtId);
 
