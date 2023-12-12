@@ -180,6 +180,72 @@ bool isInSuccessors(llvm::BasicBlock* block, llvm::BasicBlock *blockToFind) {
     return false;
 }
 
+llvm::PHINode* InstrStatement::CheckAndGeneratePhiNode(
+    std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt,
+    std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts,
+    llvm::Instruction* lastLlvmInst,
+    llvm::BasicBlock* currBlock,
+    std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd,
+    llvm::PHINode* phi = nullptr
+) {
+    llvm::Value* llvmStmtValue = llvmStmt.first;
+    llvm::BasicBlock* llvmStmtBlock = llvmStmt.second;
+
+    llvm::pred_iterator pred = llvm::pred_begin(currBlock);
+    llvm::pred_iterator end = llvm::pred_end(currBlock);
+    for (pred; pred != end; ++pred) {
+        if (isInSuccessors(llvmStmtBlock, *pred)) {
+            // Check if an incoming value from the same block already exists,
+            // and if yes the phi node must be inserted into a predecessor
+            bool isPhiInPred = false;
+            for (auto valBlock : *incomingValBlocksToAdd) {
+                if (valBlock.second == *pred) {
+                    phi = CheckAndGeneratePhiNode(
+                        llvmStmt,
+                        llvmStmts,
+                        lastLlvmInst,
+                        *pred,
+                        incomingValBlocksToAdd
+                    );
+                    isPhiInPred = true;
+                }
+            }
+
+            if ((incomingValBlocksToAdd->size() > 0) && !phi) {
+                phi = llvm::PHINode::Create(
+                    lastLlvmInst->getType(),
+                    0,
+                    "",
+                    &*currBlock->getFirstInsertionPt()
+                );
+                // phi->print(llvm::outs());
+                // llvm::outs() << "\n";
+            }
+            if (!isPhiInPred) {
+                incomingValBlocksToAdd->push_back(
+                    std::pair<llvm::Value*, llvm::BasicBlock*>(
+                        llvmStmtValue, *pred
+                    )
+                );
+            }
+            else {
+                incomingValBlocksToAdd->clear();
+                for (std::pair<llvm::Value*, llvm::BasicBlock*> newLlvmStmt : llvmStmts) {
+                    CheckAndGeneratePhiNode(
+                        newLlvmStmt,
+                        llvmStmts,
+                        lastLlvmInst,
+                        *pred,
+                        incomingValBlocksToAdd,
+                        phi
+                    );
+                }
+            }
+        }
+    }
+    return phi;
+}
+
 llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
     std::vector<uint> defStmtIds = GetOperandWriteInstructionIds(ptxOperandName);
 
@@ -216,9 +282,6 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
     
     if (llvmStmts.empty()) return nullptr;
 
-    // generate a load and get its value if the last generate instruction is a
-    // store, else get the value of the last generated llvm instruction
-    // that returns a value
     llvm::Value* lastLlvmStmt = llvmStmts.back().first;
     llvm::Instruction* lastLlvmInst = llvm::dyn_cast<llvm::Instruction>(
         lastLlvmStmt
@@ -235,11 +298,9 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
         // reverse the vector to get the last generated instruction from each
         // block
         reverse(llvmStmts.begin(), llvmStmts.end());
-        bool isValueInPred = false;
         std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> incomingValBlocksToAdd;
         for (std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt : llvmStmts) {
             llvm::Value* llvmStmtValue = llvmStmt.first;
-
             llvm::BasicBlock* llvmStmtBlock = llvmStmt.second;
             if (prevBlock != llvmStmtBlock) {
                 if (isBlockInPredecessors(llvmStmtBlock, currBlock)) {
@@ -247,43 +308,31 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
 
                     // if already shown in another predecessor create a phi node,
                     // or add a value to an existing one
-                    if (isValueInPred && !phi) {
+                    if ((incomingValBlocksToAdd.size() > 0) && !phi) {
                         phi = llvm::PHINode::Create(
                             lastLlvmInst->getType(),
                             0,
                             "",
                             &*currBlock->getFirstInsertionPt()
                         );
+                        phi->print(llvm::outs());
+                        llvm::outs() << "\n";
                     }
                     incomingValBlocksToAdd.push_back(
                         std::pair<llvm::Value*, llvm::BasicBlock*>(
                             llvmStmtValue, llvmStmtBlock
                         )
                     );
-                    isValueInPred = true;
                 }
                 else {
                     // If not in direct predecessor
-                    llvm::pred_iterator pred = llvm::pred_begin(currBlock);
-                    llvm::pred_iterator end = llvm::pred_end(currBlock);
-                    for (pred; pred != end; ++pred) {
-                        if (isInSuccessors(llvmStmtBlock, *pred)) {
-                            if (isValueInPred && !phi) {
-                                phi = llvm::PHINode::Create(
-                                    lastLlvmInst->getType(),
-                                    0,
-                                    "",
-                                    &*currBlock->getFirstInsertionPt()
-                                );
-                            }
-                            incomingValBlocksToAdd.push_back(
-                                std::pair<llvm::Value*, llvm::BasicBlock*>(
-                                    llvmStmtValue, *pred
-                                )
-                            );
-                            isValueInPred = true;
-                        }
-                    }
+                    phi = CheckAndGeneratePhiNode(
+                        llvmStmt,
+                        llvmStmts,
+                        lastLlvmInst,
+                        currBlock,
+                        &incomingValBlocksToAdd
+                    );
                 }
             }
 
@@ -301,25 +350,28 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
         reverse(llvmStmts.begin(), llvmStmts.end());
     }
 
+    // generate a load and get its value if the last generate instruction is a
+    // store, else get the value of the last generated llvm instruction
+    // that returns a value
     // std::string lastLlvmStmtName = lastLlvmInst->getOpcodeName();
     llvm::Value* instValue = nullptr;
-    if (lastLlvmInst && (lastLlvmInst->getOpcode() == llvm::Instruction::Store)) {
-        llvm::Value* firstOperand = lastLlvmInst->getOperand(0);
-        llvm::Value* secondOperand = lastLlvmInst->getOperand(1);
-        llvm::Type* loadType = firstOperand->getType();
-        instValue = PtxToLlvmIrConverter::Builder->CreateLoad(
-            loadType,
-            secondOperand
-        );
-    }
-    else {
+    // if (lastLlvmInst && (lastLlvmInst->getOpcode() == llvm::Instruction::Store)) {
+    //     llvm::Value* firstOperand = lastLlvmInst->getOperand(0);
+    //     llvm::Value* secondOperand = lastLlvmInst->getOperand(1);
+    //     llvm::Type* loadType = firstOperand->getType();
+    //     instValue = PtxToLlvmIrConverter::Builder->CreateLoad(
+    //         loadType,
+    //         secondOperand
+    //     );
+    // }
+    // else {
         for (auto it = llvmStmts.rbegin(); it != llvmStmts.rend(); ++it) {
             if ((*it).first->getType()->getTypeID() != llvm::Type::VoidTyID) {
                 instValue = (*it).first;
                 break;
             }
         }
-    }
+    // }
 
     return instValue;
 }
@@ -684,6 +736,8 @@ void InstrStatement::ToLlvmIr() {
                         PtxToLlvmIrConverter::Builder->CreateAlloca(argType);
                     llvm::Value *store =
                         PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
+                    llvm::Value *load =
+                        PtxToLlvmIrConverter::Builder->CreateLoad(argType, alloca);
 
                     // Store generated instructions
                     genLlvmInstructions.push_back(
@@ -693,6 +747,10 @@ void InstrStatement::ToLlvmIr() {
                     genLlvmInstructions.push_back(
                         std::pair<llvm::Value*, llvm::BasicBlock*>(
                             store, currBlock)
+                    );
+                    genLlvmInstructions.push_back(
+                        std::pair<llvm::Value*, llvm::BasicBlock*>(
+                            load, currBlock)
                     );
                 }
             }
@@ -1034,6 +1092,8 @@ void InstrStatement::ToLlvmIr() {
                 firstOperandValue,
                 currBasicBlock
             );
+            // phi->print(llvm::outs());
+            // llvm::outs() << "\n";
 
             add = PtxToLlvmIrConverter::Builder->CreateAdd(
                 phi,
@@ -1565,6 +1625,9 @@ void InstrStatement::ToLlvmIr() {
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(ret, currBlock)
         );
+    }
+    else {
+        llvm::outs() << "\033[1;31m"+Inst+" not handled!\033[0m\n";
     }
 
     // check if instruction contains .wide modifier

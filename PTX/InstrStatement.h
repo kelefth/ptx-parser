@@ -33,6 +33,15 @@ class InstrStatement : public Statement {
         llvm::BasicBlock* haystack
     );
 
+    llvm::PHINode* CheckAndGeneratePhiNode(
+        std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt,
+        std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts,
+        llvm::Instruction* lastLlvmInst,
+        llvm::BasicBlock* currBlock,
+        std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd,
+        llvm::PHINode* phi
+    );
+
     // Get source operand's value by getting the mapping
     // of the last instruction that used it as destination.
     // isComplex is used when the PTX instructions don't
