@@ -2,6 +2,8 @@
 LLVM_BUILD_PATH := $$HOME/llvm-project/build
 LLVM_BIN_PATH 	:= $(LLVM_BUILD_PATH)/bin
 
+# Z3_PATH := $$HOME/z3/z3-z3-4.12.2/build
+
 CXX := g++
 CXXFLAGS := -g -std=c++17
 
@@ -42,7 +44,7 @@ make_builddir:
 all: make_builddir $(BUILDDIR)/ptx-parser
 
 $(BUILDDIR)/ptx-parser: $(OBJ_FILES)
-	$(CXX) $(CXXFLAGS) $^ $(LLVM_FLAGS) -o $@
+	$(CXX) $(CXXFLAGS) $^ $(LLVM_FLAGS) -lz3 -o $@
 
 $(BUILDDIR)/PtxToLlvmIrConverter.o: $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.h
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.cpp $(LLVM_FLAGS) -o $@
@@ -51,7 +53,7 @@ $(BUILDDIR)/lexer.o: $(SRC_PTX_LEXER_DIR)/lexer.h $(SRC_PTX_LEXER_DIR)/lexer.cpp
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_LEXER_DIR)/lexer.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/parser.o: $(SRC_PTX_PARSER_DIR)/parser.h $(SRC_PTX_LEXER_DIR)/lexer.h $(SRC_PTX_DIR)/InstrStatement.h $(SRC_PTX_DIR)/DirectStatement.h $(SRC_PTX_DIR)/Operand.h $(SRC_PTX_DIR)/AddressExpr.h $(SRC_PTX_PARSER_DIR)/parser.cpp
-	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_PARSER_DIR)/parser.cpp $(LLVM_FLAGS) -o $@
+	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_PARSER_DIR)/parser.cpp $(LLVM_FLAGS) -o $@ -fexceptions
 
 $(BUILDDIR)/Statement.o: $(SRC_PTX_DIR)/Statement.h $(SRC_PTX_DIR)/Statement.cpp
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTX_DIR)/Statement.cpp $(LLVM_FLAGS) -o $@
