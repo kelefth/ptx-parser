@@ -315,8 +315,6 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
                             "",
                             &*currBlock->getFirstInsertionPt()
                         );
-                        phi->print(llvm::outs());
-                        llvm::outs() << "\n";
                     }
                     incomingValBlocksToAdd.push_back(
                         std::pair<llvm::Value*, llvm::BasicBlock*>(
@@ -835,6 +833,9 @@ void InstrStatement::ToLlvmIr() {
         std::string sourceOpName = std::get<std::string>(SourceOps[0]->getValue());
         llvm::Value* sourceOpValue = GetLlvmRegisterValue(sourceOpName);
 
+        llvm::BasicBlock* currBlock =
+                PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
         std::shared_ptr<Operand> addrFirstOp =
             destOpAddr.getFirstOperand();
         OperandType addrFirstOpType = addrFirstOp->getType();
@@ -859,7 +860,7 @@ void InstrStatement::ToLlvmIr() {
                 addrFirstOp->getValue()
             );
 
-            llvm::Value* addrFirstOpValue = GetLlvmRegisterValue(regName);;
+            llvm::Value* addrFirstOpValue = GetLlvmRegisterValue(regName);
             llvm::Value* exprValue = addrFirstOpValue;
 
             if (addrSecondOp != nullptr) {
@@ -877,6 +878,16 @@ void InstrStatement::ToLlvmIr() {
                     addrSecondOpValue,
                     true
                 );
+
+                exprValue = PtxToLlvmIrConverter::Builder->CreateAdd(
+                    addrFirstOpValue,
+                    addrSecondOperandValue
+                );
+
+                genLlvmInstructions.push_back(
+                    std::pair<llvm::Value*, llvm::BasicBlock*>(
+                        exprValue, currBlock)
+                );
             }
 
             if (sourceOpValue == nullptr || exprValue == nullptr)
@@ -887,8 +898,6 @@ void InstrStatement::ToLlvmIr() {
                 exprValue
             );
 
-            llvm::BasicBlock* currBlock =
-                PtxToLlvmIrConverter::Builder->GetInsertBlock();
             genLlvmInstructions.push_back(
                 std::pair<llvm::Value*, llvm::BasicBlock*>(st, currBlock)
             );
@@ -1084,29 +1093,11 @@ void InstrStatement::ToLlvmIr() {
             SourceOps[0]->getValue()
         );
         std::string destName = std::get<std::string>(DestOps[0]->getValue());
-        if (destName == firstSourceOpName) {
-            llvm::BasicBlock* currBasicBlock
-                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
-
-            llvm::PHINode* phi = CreatePhiInBlockStart(
-                firstOperandValue,
-                currBasicBlock
-            );
-            // phi->print(llvm::outs());
-            // llvm::outs() << "\n";
-
-            add = PtxToLlvmIrConverter::Builder->CreateAdd(
-                phi,
-                secondOperandValue
-            );
-            phi->addIncoming(add, currBasicBlock);
-        }
-        else {
-            add = PtxToLlvmIrConverter::Builder->CreateAdd(
-                firstOperandValue,
-                secondOperandValue
-            );
-        }
+        
+        add = PtxToLlvmIrConverter::Builder->CreateAdd(
+            firstOperandValue,
+            secondOperandValue
+        );
 
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(add, currBlock)
@@ -1311,27 +1302,11 @@ void InstrStatement::ToLlvmIr() {
             SourceOps[0]->getValue()
         );
         std::string destName = std::get<std::string>(DestOps[0]->getValue());
-        if (destName == firstSourceOpName) {
-            llvm::BasicBlock* currBasicBlock
-                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-            llvm::PHINode* phi = CreatePhiInBlockStart(
-                firstOperandValue,
-                currBasicBlock
-            );
-
-            sub = PtxToLlvmIrConverter::Builder->CreateSub(
-                phi,
-                secondOperandValue
-            );
-            phi->addIncoming(sub, currBasicBlock);
-        }
-        else {
-            sub = PtxToLlvmIrConverter::Builder->CreateSub(
-                firstOperandValue,
-                secondOperandValue
-            );
-        }
+        sub = PtxToLlvmIrConverter::Builder->CreateSub(
+            firstOperandValue,
+            secondOperandValue
+        );
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1353,27 +1328,11 @@ void InstrStatement::ToLlvmIr() {
             SourceOps[0]->getValue()
         );
         std::string destName = std::get<std::string>(DestOps[0]->getValue());
-        if (destName == firstSourceOpName) {
-            llvm::BasicBlock* currBasicBlock
-                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-            llvm::PHINode* phi = CreatePhiInBlockStart(
-                firstOperandValue,
-                currBasicBlock
-            );
-
-            mul = PtxToLlvmIrConverter::Builder->CreateMul(
-                phi,
-                secondOperandValue
-            );
-            phi->addIncoming(mul, currBasicBlock);
-        }
-        else {
-            mul = PtxToLlvmIrConverter::Builder->CreateMul(
-                firstOperandValue,
-                secondOperandValue
-            );
-        }
+        mul = PtxToLlvmIrConverter::Builder->CreateMul(
+            firstOperandValue,
+            secondOperandValue
+        );
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1558,7 +1517,7 @@ void InstrStatement::ToLlvmIr() {
 
         // check if label exists before the current instruction
         bool labelExistsBeforeInst = false;
-        for (const auto stmt : statements) {
+        for (const auto stmt : currKernel->getBodyStatements()) {
             if (stmt->getId() >= getId()) break;
             if (targetValue == stmt->getLabel())
                 labelExistsBeforeInst = true;
@@ -1617,6 +1576,140 @@ void InstrStatement::ToLlvmIr() {
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(br, currBasicBlock)
         );
+
+        // If in loop, iterate through loop statements again and apply fixes
+        if (labelExistsBeforeInst) {
+            bool inCurrBlock = false;
+            for (const auto stmt : currKernel->getBodyStatements()) {
+                uint stmtId = stmt->getId();
+                if (stmtId >= this->getId()) break;
+
+                if (stmt->getLabel() == targetValue)
+                    inCurrBlock = true;
+                // find current block
+                if (!inCurrBlock) continue;
+
+                // skip if not an instruction or has no source operands
+                InstrStatement* instStmt =
+                    dynamic_cast<InstrStatement*>(stmt.get());
+                if (!instStmt || (instStmt->getSourceOps().size() == 0))
+                    continue;
+
+                auto sourceOp = instStmt->getSourceOps()[0]->getValue();
+                std::string* firstSourceOpName =
+                    std::get_if<std::string>(&sourceOp);
+
+                auto destOp = instStmt->getDestOps()[0]->getValue();
+                std::string* destName =
+                    std::get_if<std::string>(&destOp);
+
+                // skip if first or destination operand is not a register
+                if (!firstSourceOpName || !destName) continue;
+                
+                if (*destName == *firstSourceOpName) {
+
+                    auto llvmValues =
+                        PtxToLlvmIrConverter::getPtxToLlvmMapValue(stmtId);
+                    if (llvmValues.size() == 0) continue;
+                    std::pair<llvm::Value*, llvm::BasicBlock*> llvmValue =
+                        llvmValues[0];
+                    // llvmValue.first->print(llvm::outs());
+                    llvm::Instruction* llvmInst =
+                        llvm::dyn_cast<llvm::Instruction>(llvmValue.first);
+
+                    if (!llvmInst) continue;
+
+                    llvm::PHINode* phi = CreatePhiInBlockStart(
+                        llvmInst->getOperand(0),
+                        currBasicBlock
+                    );
+
+                    // update first operand with phi node and add this value
+                    // as incoming the phi node (loop)
+                    phi->addIncoming(llvmInst, currBasicBlock);
+                    // update all occurences of this register in this loop
+                    // with the phi node
+                    bool innerInCurrBlock = false;
+                    for (const auto innerStmt : currKernel->getBodyStatements()) {
+                        uint innerStmtId = innerStmt->getId();
+                        if (innerStmtId > stmtId) break;
+
+                        if (innerStmt->getLabel() == targetValue)
+                            innerInCurrBlock = true;
+                        // find current block
+                        if (!innerInCurrBlock) continue;
+
+                        InstrStatement* innerInstStmt =
+                            dynamic_cast<InstrStatement*>(innerStmt.get());
+
+                        if (!innerInstStmt) continue;
+
+                        auto innerLlvmValues =
+                            PtxToLlvmIrConverter::getPtxToLlvmMapValue(innerStmtId);
+                        if (innerLlvmValues.size() == 0) continue;
+                        std::pair<llvm::Value*, llvm::BasicBlock*> innerllvmValue =
+                            innerLlvmValues[0];
+
+                        llvm::Instruction* innerLlvmInst =
+                            llvm::dyn_cast<llvm::Instruction>(innerllvmValue.first);
+
+                        if (!innerLlvmInst) continue;
+
+                        // Check all source operands for the register
+                        // and update the value with the phi node if found
+                        for (const auto &sourceOp : innerInstStmt->getSourceOps()) {
+                            auto sourceOpValue = sourceOp->getValue();
+                            std::string* sourceOpName =
+                                std::get_if<std::string>(&sourceOpValue);
+
+                            if (!sourceOpName) {
+                                AddressExpr* addrExpr =
+                                    std::get_if<AddressExpr>(&sourceOpValue);
+                                if (addrExpr) {
+                                    auto addrExprOpValue =
+                                        addrExpr->getFirstOperand()->getValue();
+                                    sourceOpName = std::get_if<std::string>(
+                                        &addrExprOpValue
+                                    );
+                                }
+                            }
+                            
+                            if (sourceOpName && *sourceOpName == *destName) {
+                                innerLlvmInst->setOperand(0, phi);
+                            }
+                        }
+
+                        // Check destination register, in case that this is
+                        // a store instruction that uses the register
+                        if (innerInstStmt->getDestOps().size() > 0) {
+                            auto destOpValue =
+                                innerInstStmt->getDestOps()[0]->getValue();
+                            AddressExpr* addrExpr =
+                                std::get_if<AddressExpr>(&destOpValue);
+                            if (!addrExpr) continue;
+
+                            auto addrExprOpValue =
+                                addrExpr->getFirstOperand()->getValue();
+                            std::string* destOpName = std::get_if<std::string>(
+                                &addrExprOpValue
+                            );
+
+                            if (destOpName && *destOpName == *destName) {
+                                uint opcode = innerLlvmInst->getOpcode();
+                                // case that there is and addition in the
+                                // accessed address
+                                if (opcode == llvm::Instruction::Add)
+                                    innerLlvmInst->setOperand(0, phi);
+                                else if (opcode == llvm::Instruction::Store)
+                                    innerLlvmInst->setOperand(1, phi);
+                            }
+                        }
+
+                        // llvmInst->setOperand(0, phi);
+                    }
+                }
+            }
+        }
     }
     else if (Inst == "ret") {
         llvm::Value* ret = PtxToLlvmIrConverter::Builder->CreateRetVoid();
