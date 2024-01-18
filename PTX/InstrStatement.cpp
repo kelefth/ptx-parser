@@ -960,6 +960,55 @@ void InstrStatement::ToLlvmIr() {
 
         // genLlvmInstructions.push_back(load);
     }
+    else if (Inst == "cvt") {
+        llvm::Value* sourceValue = GetLlvmOperandValue(SourceOps[0]);
+
+        std::string sourceType = Types[0];
+        std::string destType = Types[1];
+        char sourceTypePrefix = sourceType[0];
+        char destTypePrefix = destType[0];
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+        std::string sourceTypeBitsStr = std::regex_replace(
+            sourceType,
+            std::regex("[a-z]+"),
+            std::string("$1")
+        );
+        int sourceTypeBits = stoi(sourceTypeBitsStr);
+
+        std::string destTypeBitsStr = std::regex_replace(
+            destType,
+            std::regex("[a-z]+"),
+            std::string("$1")
+        );
+        int destTypeBits = stoi(destTypeBitsStr);
+
+        if ((sourceTypePrefix == destTypePrefix) &&
+            (destTypeBits == 2 * sourceTypeBits)
+        ) {
+            // Create zext or sext instruction
+            llvm::Type* destLlvmType = PtxToLlvmIrConverter::GetTypeMapping(
+                destType
+            )(*PtxToLlvmIrConverter::Context);
+
+            // if instruction type is signed, create sext
+            llvm::Value* ext;
+            if (sourceTypePrefix == 's') {
+                ext = PtxToLlvmIrConverter::Builder->CreateSExt(
+                    sourceValue,
+                    destLlvmType
+                );
+            }
+            else {
+                ext = PtxToLlvmIrConverter::Builder->CreateZExt(
+                    sourceValue,
+                    destLlvmType
+                );
+            }
+        }
+    }
     else if (Inst == "mov") {
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -992,6 +1041,15 @@ void InstrStatement::ToLlvmIr() {
                 genLlvmInstructions.push_back(
                     std::pair<llvm::Value*, llvm::BasicBlock*>(call, currBlock)
                 );
+            }
+            else {
+                // if bit type convert to address
+                if (Types.front()[0] == 'b') {
+                    llvm::Value* opValue = GetLlvmOperandValue(SourceOps[0]);
+                    opValue->mutateType(
+                        llvm::PointerType::get(*PtxToLlvmIrConverter::Context, 0)
+                    );
+                }
             }
         }
         else if (firstOpType == OperandType::Immediate) {
@@ -1247,6 +1305,8 @@ void InstrStatement::ToLlvmIr() {
                                 llvm::cast<llvm::GlobalValue>(llvmValue);
 
                             llvm::Type* valueType = globVarLlvmValue->getValueType();
+                            if (!valueType->isArrayTy()) return;
+
                             uint numElements = valueType->getArrayNumElements();
                             llvm::Type* elemType = valueType->getArrayElementType();
                             
@@ -1674,6 +1734,39 @@ void InstrStatement::ToLlvmIr() {
             std::pair<llvm::Value*, llvm::BasicBlock*>(fadd, currBlock)
         );
     }
+    else if (Inst == "rcp") {
+        llvm::Value* sourceOpValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Type* sourceOpType = sourceOpValue->getType();
+
+        if (sourceOpValue == nullptr)
+            return;
+
+        char sourceTypePrefix = Types.front()[0];
+        llvm::Value* div = nullptr;
+        llvm::Value* constOne = nullptr;
+
+        if (sourceOpType->isFloatingPointTy())
+            constOne = llvm::ConstantFP::get(sourceOpType,1.0);
+        else
+            constOne = llvm::ConstantInt::get(sourceOpType, 1);
+
+        if (sourceTypePrefix == 's') {
+            div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+                constOne, sourceOpValue
+            );
+        }
+        else {
+            div = PtxToLlvmIrConverter::Builder->CreateUDiv(
+                constOne, sourceOpValue
+            );
+        }
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(div, currBlock)
+        );
+    }
     else if (Inst == "setp") {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
@@ -1940,6 +2033,25 @@ void InstrStatement::ToLlvmIr() {
             std::pair<llvm::Value*, llvm::BasicBlock*>(ret, currBlock)
         );
     }
+    else if (Inst == "bar") {
+        // generate call to llvm.nvvm.barrier0 intrinsic
+        llvm::FunctionType *ft = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(*PtxToLlvmIrConverter::Context),
+            false
+        );
+        std::string funcName = "llvm.nvvm.barrier0";
+
+        llvm::FunctionCallee func =
+            PtxToLlvmIrConverter::Module->getOrInsertFunction(funcName, ft);
+        llvm::Value *call =
+            PtxToLlvmIrConverter::Builder->CreateCall(func);
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(call, currBlock)
+        );
+    }
     else {
         llvm::outs() << "\033[1;31m"+Inst+" not handled!\033[0m\n";
     }
@@ -1981,6 +2093,68 @@ void InstrStatement::ToLlvmIr() {
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(ext, currBlock)
+        );
+    }
+
+    // check if instruction contains rn modifier
+    // and generate call to roundeven intrinsic
+    auto rnIter = std::find(Modifiers.begin(), Modifiers.end(), "rn");
+    if (rnIter != Modifiers.end()) {
+        llvm::Value* sourceOpValue = GetLlvmOperandValue(SourceOps[0]);
+        
+        llvm::Type *funcType = PtxToLlvmIrConverter::GetTypeMapping(
+            Types[0]
+        )(*PtxToLlvmIrConverter::Context);
+
+        std::string funcTypeStr;
+        llvm::raw_string_ostream ostream(funcTypeStr);
+        funcType->print(ostream);
+        funcTypeStr = ostream.str();
+
+        std::vector<llvm::Type*> params;
+        params.push_back(sourceOpValue->getType());
+
+        llvm::FunctionType *ft = llvm::FunctionType::get(
+            funcType,
+            false
+        );
+
+        std::string funcName = "llvm.roundeven." + funcTypeStr;
+
+        llvm::FunctionCallee func =
+            PtxToLlvmIrConverter::Module->getOrInsertFunction(funcName, ft);
+        llvm::Value *call =
+            PtxToLlvmIrConverter::Builder->CreateCall(func);
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(call, currBlock)
+        );
+    }
+
+    // Check if instruction contains lo modifier and generate an and instruction
+    // to keep lower bits of the results
+    auto loIter = std::find(Modifiers.begin(), Modifiers.end(), "lo");
+    if (loIter != Modifiers.end()) {
+        llvm::Value* firstSourceOpValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Type* firstSourceOpType = firstSourceOpValue->getType();
+
+        llvm::Value* lastInst = genLlvmInstructions.back().first;
+
+        llvm::APInt mask(
+            firstSourceOpValue->getType()->getIntegerBitWidth(), 0xFFFFFFFF
+        );
+
+        llvm::Value* andInst = PtxToLlvmIrConverter::Builder->CreateAnd(
+            lastInst,
+            llvm::ConstantInt::get(lastInst->getType(), mask)
+        );
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(andInst, currBlock)
         );
     }
 
