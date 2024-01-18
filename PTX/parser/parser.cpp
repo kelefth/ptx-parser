@@ -771,6 +771,7 @@ std::string UnfoldValue(
                 valueInst->isBitwiseLogicOp()
             );
         }
+        else opValueStr = ConvertToZ3Syntax(operand, valueInst->isBitwiseLogicOp());
 
         // Check if the operand instruction is a bitwise operation
         // and convert the value if the current instruction not a bitwise
@@ -841,6 +842,8 @@ int main() {
 
     PtxToLlvmIrConverter::Initialize();
 
+    // dump_statements();
+
     for(auto statement : statements) {
         statement->ToLlvmIr();
     }
@@ -849,7 +852,6 @@ int main() {
         PtxToLlvmIrConverter::Module->getFunctionList();
         
     PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
-    // dump_statements();
 
     // Apply modifications to the IR to fix errors
     DominatorTree* dt;
@@ -912,13 +914,14 @@ int main() {
             }
             else {
                 // Create a div instruction if the offset is not a constant
-                Value* div = BinaryOperator::CreateUDiv(
-                    offset,
-                    pointeeSizeValue,
-                    "",
-                    currInst
-                );
-                indexValue = div;
+                // Value* div = BinaryOperator::CreateUDiv(
+                //     offset,
+                //     pointeeSizeValue,
+                //     "",
+                //     currInst
+                // );
+                // indexValue = div;
+                indexValue = currInst->getOperand(1);
             }
             
             Value* indexList[] = { indexValue };
@@ -1091,15 +1094,15 @@ int main() {
             generatedVars.push_back(loopVarName);
             if (loopDirection == Loop::LoopBounds::Direction::Increasing) {
                 loopNumExpr =
-                    "(to_int (ceiling (/ " + finalValueStr + " " + 
-                    stepValueStr + ")))";
+                    "(ceiling (/ " + finalValueStr + " " + 
+                    stepValueStr + "))";
                 constraint =
                     "<= " + initialValueStr + " " + loopVarName + " " + finalValueStr;
             }
             if (loopDirection == Loop::LoopBounds::Direction::Decreasing) {
                 loopNumExpr =
-                    "(to_int (ceiling (/ " + initialValueStr + " " + 
-                    stepValueStr + ")))";
+                    "(ceiling (/ " + initialValueStr + " " + 
+                    stepValueStr + "))";
                 constraint =
                     "<= " + finalValueStr + " " + loopVarName + " " + initialValueStr;
             }
@@ -1283,8 +1286,8 @@ int main() {
         //     case z3::unknown: outs() << "No result\n"; break;
         // }
 
-        std::string z3Expr = "(define-fun ceiling ((x Real)) Int "
-            "(+ (div (+ x 1) 1) (- (div (div (+ x 1) 1) x) 1)))";
+        std::string z3Expr = "(define-fun ceiling ((x Real)) Int"
+            "(ite (>= (- x (to_real (to_int x))) 0.0) (to_int x) (+ (to_int x) 1)))";
         // Keep unique declarations and add them in z3 expression
         // std::unique(decls.begin(), decls.end());
         // for (std::string decl : decls)
@@ -1295,7 +1298,6 @@ int main() {
             z3Expr += "(assert (" + constraint + "))";
         }
         z3Expr += "(check-sat)";
-        outs() << "expr: " << z3Expr << "\n";
         // solver.from_string(z3Expr.c_str());
         // solverContext.check_parser_error();
         // z3::expr_vector expr = solverContext.parse_string(z3Expr.c_str());
@@ -1308,6 +1310,7 @@ int main() {
                 decls += "(declare-const " + loopVar + " Int)";
 
             z3Expr = decls + z3Expr;
+            outs() << "expr: " << z3Expr << "\n";
             z3::expr_vector expr = solverContext.parse_string(z3Expr.c_str());
             // solverContext.check_parser_error();
             solver.add(expr);

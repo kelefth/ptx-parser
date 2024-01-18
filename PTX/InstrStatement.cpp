@@ -708,6 +708,16 @@ void InstrStatement::ToLlvmIr() {
     if (Inst == "ld") {
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+        // get operands of address expression
+        auto sourceOpAddr = std::get<AddressExpr>(SourceOps[0]->getValue());
+
+        std::shared_ptr<Operand> addrFirstOp =
+            sourceOpAddr.getFirstOperand();
+        OperandType addrFirstOpType = addrFirstOp->getType();
+        std::shared_ptr<Operand> addrSecondOp =
+            sourceOpAddr.getSecondOperand();
+        
         // check if it's an ld.param instruction
         auto modIterator = std::find(
             Modifiers.begin(),
@@ -716,24 +726,64 @@ void InstrStatement::ToLlvmIr() {
         );
         // if ld.param
         if (modIterator != Modifiers.end()) {
-            llvm::Function *func =
-                &PtxToLlvmIrConverter::Module->getFunctionList().back();
-
-            // get value of source operand
-            // ld.param's source operand's value is always an AddressExpr
-            auto value = std::get<AddressExpr>(SourceOps[0]->getValue());
+            llvm::Function *func = nullptr;
+            std::string currKernelName = GetCurrentKernel()->getName();
+            for(llvm::Function &f : PtxToLlvmIrConverter::Module->getFunctionList()) {
+                if (f.getName().contains(currKernelName))
+                    func = &f;
+            }
 
             auto args = func->args();
             for (auto &arg : args) {
                 if (
-                    (arg.getName() == value.getFirstOperand()->ToString()) ||
-                    (arg.getName() == value.getSecondOperand()->ToString())
+                    (arg.getName() == sourceOpAddr.getFirstOperand()->ToString()) ||
+                    (arg.getName() == sourceOpAddr.getSecondOperand()->ToString())
                 ) {
                     llvm::Type *argType = arg.getType();
+                    // if (argType->getTypeID() != llvm::Type::PointerTyID) {
+                    //     arg.mutateType(llvm::Type::getInt32PtrTy(
+                    //         *PtxToLlvmIrConverter::Context
+                    //     ));
+                    // }
+                    llvm::Value* addressValue = &arg;
+                    if (addrSecondOp != nullptr) {
+                        // address is the result of an operation, add an instruction
+                        // with the operation and pass the result to the store
+                        // instruction
+
+                        llvm::Type *type = llvm::Type::getInt32Ty(
+                            *PtxToLlvmIrConverter::Context
+                        );
+
+                        double addrSecondOpValue = std::get<double>(
+                            addrSecondOp->getValue()
+                        );
+                        llvm::Value* addrSecondOperandValue = llvm::ConstantInt::get(
+                            type,
+                            addrSecondOpValue,
+                            true
+                        );
+
+                        llvm::Value* indexList[] = { addrSecondOperandValue };
+                        llvm::Value* addrValue = PtxToLlvmIrConverter::Builder->CreateInBoundsGEP(
+                            argType,
+                            &arg,
+                            llvm::ArrayRef<llvm::Value*>(indexList, 1),
+                            ""
+                        );
+
+                        genLlvmInstructions.push_back(
+                            std::pair<llvm::Value*, llvm::BasicBlock*>(
+                                addrValue, currBlock)
+                        );
+
+                        addressValue = addrValue;
+                    }
+
                     llvm::AllocaInst *alloca =
                         PtxToLlvmIrConverter::Builder->CreateAlloca(argType);
                     llvm::Value *store =
-                        PtxToLlvmIrConverter::Builder->CreateStore(&arg,alloca);
+                        PtxToLlvmIrConverter::Builder->CreateStore(addressValue, alloca);
                     llvm::Value *load =
                         PtxToLlvmIrConverter::Builder->CreateLoad(argType, alloca);
 
@@ -754,13 +804,6 @@ void InstrStatement::ToLlvmIr() {
             }
         }
         else {
-            auto sourceOpAddr = std::get<AddressExpr>(SourceOps[0]->getValue());
-
-            std::shared_ptr<Operand> addrFirstOp =
-                sourceOpAddr.getFirstOperand();
-            OperandType addrFirstOpType = addrFirstOp->getType();
-            std::shared_ptr<Operand> addrSecondOp =
-                sourceOpAddr.getSecondOperand();
             if (addrFirstOpType == OperandType::Immediate) {
                 llvm::Type *type = llvm::Type::getInt32Ty(
                     *PtxToLlvmIrConverter::Context
@@ -825,6 +868,9 @@ void InstrStatement::ToLlvmIr() {
                 genLlvmInstructions.push_back(
                     std::pair<llvm::Value*, llvm::BasicBlock*>(ld, currBlock)
                 );
+            }
+            else if (addrFirstOpType == OperandType::Label) {
+                
             }
         }
     }
@@ -1094,10 +1140,30 @@ void InstrStatement::ToLlvmIr() {
         );
         std::string destName = std::get<std::string>(DestOps[0]->getValue());
         
-        add = PtxToLlvmIrConverter::Builder->CreateAdd(
-            firstOperandValue,
-            secondOperandValue
-        );
+        llvm::Instruction* firstOperandInst = 
+                llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
+
+        if ((destName == firstSourceOpName) && !firstOperandInst) {
+            llvm::BasicBlock* currBasicBlock
+                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::PHINode* phi = CreatePhiInBlockStart(
+                firstOperandValue,
+                currBasicBlock
+            );
+
+            add = PtxToLlvmIrConverter::Builder->CreateAdd(
+                phi,
+                secondOperandValue
+            );
+            phi->addIncoming(add, currBasicBlock);
+        }
+        else {
+            add = PtxToLlvmIrConverter::Builder->CreateAdd(
+                firstOperandValue,
+                secondOperandValue
+            );
+        }
 
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(add, currBlock)
@@ -1303,10 +1369,30 @@ void InstrStatement::ToLlvmIr() {
         );
         std::string destName = std::get<std::string>(DestOps[0]->getValue());
 
-        sub = PtxToLlvmIrConverter::Builder->CreateSub(
-            firstOperandValue,
-            secondOperandValue
-        );
+        llvm::Instruction* firstOperandInst = 
+                llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
+
+        if ((destName == firstSourceOpName) && !firstOperandInst) {
+            llvm::BasicBlock* currBasicBlock
+                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::PHINode* phi = CreatePhiInBlockStart(
+                firstOperandValue,
+                currBasicBlock
+            );
+
+            sub = PtxToLlvmIrConverter::Builder->CreateSub(
+                phi,
+                secondOperandValue
+            );
+            phi->addIncoming(sub, currBasicBlock);
+        }
+        else {
+            sub = PtxToLlvmIrConverter::Builder->CreateSub(
+                firstOperandValue,
+                secondOperandValue
+            );
+        }
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1329,15 +1415,99 @@ void InstrStatement::ToLlvmIr() {
         );
         std::string destName = std::get<std::string>(DestOps[0]->getValue());
 
-        mul = PtxToLlvmIrConverter::Builder->CreateMul(
-            firstOperandValue,
-            secondOperandValue
-        );
+        llvm::Instruction* firstOperandInst = 
+                llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
+
+        if ((destName == firstSourceOpName) && !firstOperandInst) {
+            llvm::BasicBlock* currBasicBlock
+                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::PHINode* phi = CreatePhiInBlockStart(
+                firstOperandValue,
+                currBasicBlock
+            );
+
+            mul = PtxToLlvmIrConverter::Builder->CreateMul(
+                phi,
+                secondOperandValue
+            );
+            phi->addIncoming(mul, currBasicBlock);
+        }
+        else {
+            mul = PtxToLlvmIrConverter::Builder->CreateMul(
+                firstOperandValue,
+                secondOperandValue
+            );
+        }
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(mul, currBlock)
+        );
+    }
+    else if (Inst == "div") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
+        bool isSigned = Types.front()[0] == 's';
+
+        // Create phi node for possible induction variable, if the source
+        // and dest registers are the same
+        llvm::Value* div = nullptr;
+        std::string firstSourceOpName = std::get<std::string>(
+            SourceOps[0]->getValue()
+        );
+        std::string destName = std::get<std::string>(DestOps[0]->getValue());
+
+        llvm::Instruction* firstOperandInst = 
+                llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
+
+        if ((destName == firstSourceOpName) && !firstOperandInst) {
+            llvm::BasicBlock* currBasicBlock
+                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::PHINode* phi = CreatePhiInBlockStart(
+                firstOperandValue,
+                currBasicBlock
+            );
+
+            if (isSigned) {    
+                div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+                    phi,
+                    secondOperandValue
+                );
+            }
+            else {
+                div = PtxToLlvmIrConverter::Builder->CreateUDiv(
+                    phi,
+                    secondOperandValue
+                );
+            }
+            phi->addIncoming(div, currBasicBlock);
+        }
+        else {
+            if (isSigned) {
+                div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
+            else {
+                div = PtxToLlvmIrConverter::Builder->CreateUDiv(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
+        }
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(div, currBlock)
         );
     }
     else if (Inst == "shl") {
@@ -1356,6 +1526,50 @@ void InstrStatement::ToLlvmIr() {
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(shl, currBlock)
+        );
+    }
+    else if (Inst == "min" || Inst == "max") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+
+        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
+            return;
+
+        llvm::Type *funcType = PtxToLlvmIrConverter::GetTypeMapping(
+            Types[0]
+        )(*PtxToLlvmIrConverter::Context);
+
+        std::string funcTypeStr;
+        llvm::raw_string_ostream ostream(funcTypeStr);
+        funcType->print(ostream);
+        funcTypeStr = ostream.str();
+
+        std::vector<llvm::Type*> params;
+        params.push_back(firstOperandValue->getType());
+        params.push_back(secondOperandValue->getType());
+
+        llvm::FunctionType *ft = llvm::FunctionType::get(
+            funcType,
+            params,
+            false
+        );
+
+        bool isSigned = Types.front()[0] == 's';
+        
+        std::string funcNamePrefix = "";
+        if (isSigned) funcNamePrefix = "llvm.u" + Inst + ".";
+        else funcNamePrefix = "llvm.s" + Inst + ".";
+        std::string funcName = funcNamePrefix + funcTypeStr;
+
+        llvm::FunctionCallee func =
+            PtxToLlvmIrConverter::Module->getOrInsertFunction(funcName, ft);
+        llvm::Value *call =
+            PtxToLlvmIrConverter::Builder->CreateCall(func);
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(call, currBlock)
         );
     }
     else if (Inst == "and") {
@@ -1619,13 +1833,20 @@ void InstrStatement::ToLlvmIr() {
 
                     if (!llvmInst) continue;
 
+                    bool phiExists = false;
+                    for (llvm::PHINode &phiNode : currBasicBlock->phis()) {
+                        phiExists = phiNode.getIncomingValueForBlock(currBasicBlock) == llvmInst;
+                    }
+
+                    if (phiExists) continue;
+
                     llvm::PHINode* phi = CreatePhiInBlockStart(
                         llvmInst->getOperand(0),
                         currBasicBlock
                     );
 
                     // update first operand with phi node and add this value
-                    // as incoming the phi node (loop)
+                    // as incoming in the phi node (loop)
                     phi->addIncoming(llvmInst, currBasicBlock);
                     // update all occurences of this register in this loop
                     // with the phi node
@@ -1791,7 +2012,7 @@ void InstrStatement::ToLlvmIr() {
             ) {
                 ptxAddrSpace = linkStmt->getAddressSpace();
                 globVarSize = linkStmt->getSize();
-                globVarSize = linkStmt->getAlignment();
+                alignment = linkStmt->getAlignment();
             }
             else if (
                 VarDecDirectStatement* varDecStmt =
