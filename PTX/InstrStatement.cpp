@@ -277,6 +277,13 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
                 llvm::Value* value = GetLlvmRegisterValue(opName);
                 return value;
             }
+            else if (op->getType() == OperandType::Label) {
+                // Check if the operand is a global variable
+                std::string opName = std::get<std::string>(op->getValue());
+                llvm::GlobalVariable* globVar =
+                    PtxToLlvmIrConverter::Module->getGlobalVariable(opName);
+                return globVar;
+            }
         }
     }
     
@@ -1019,7 +1026,12 @@ void InstrStatement::ToLlvmIr() {
             );
 
             // check if the source operand is a special register
-            if (firstOpValue == "%ctaid" || firstOpValue == "%ntid" || firstOpValue == "%tid") {
+            if (
+                firstOpValue == "%ctaid"    || 
+                firstOpValue == "%nctaid"   || 
+                firstOpValue == "%ntid"     || 
+                firstOpValue == "%tid"
+            ) {
                 // generate call to intrinsic
                 llvm::Type *funcType = PtxToLlvmIrConverter::GetTypeMapping(
                     Types[0]
@@ -1186,8 +1198,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         // Check if destination and source registers are the same (possible
         // induction variable), if yes create phi node in the beginning of this
@@ -1201,6 +1212,9 @@ void InstrStatement::ToLlvmIr() {
         llvm::Instruction* firstOperandInst = 
                 llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
 
+        bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
+                           secondOperandValue->getType()->isFloatingPointTy();
+
         if ((destName == firstSourceOpName) && !firstOperandInst) {
             llvm::BasicBlock* currBasicBlock
                 = PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1210,17 +1224,34 @@ void InstrStatement::ToLlvmIr() {
                 currBasicBlock
             );
 
-            add = PtxToLlvmIrConverter::Builder->CreateAdd(
-                phi,
-                secondOperandValue
-            );
+            if (isFloatInst) {
+                add = PtxToLlvmIrConverter::Builder->CreateFAdd(
+                    phi,
+                    secondOperandValue
+                );
+            }
+            else {
+                add = PtxToLlvmIrConverter::Builder->CreateAdd(
+                    phi,
+                    secondOperandValue
+                );
+            }
+
             phi->addIncoming(add, currBasicBlock);
         }
         else {
-            add = PtxToLlvmIrConverter::Builder->CreateAdd(
-                firstOperandValue,
-                secondOperandValue
-            );
+            if (isFloatInst) {
+                add = PtxToLlvmIrConverter::Builder->CreateFAdd(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
+            else {
+                add = PtxToLlvmIrConverter::Builder->CreateAdd(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
         }
 
         genLlvmInstructions.push_back(
@@ -1296,11 +1327,15 @@ void InstrStatement::ToLlvmIr() {
 
                             // based on this value update the type of the globar var
                             // in the IR instruction
+                            // llvm::Value* llvmValue =
+                            //     PtxToLlvmIrConverter::getPtxToLlvmMapValue(
+                            //         currInst->getId()
+                            //     )[0].first;
                             llvm::Value* llvmValue =
-                                PtxToLlvmIrConverter::getPtxToLlvmMapValue(
-                                    currInst->getId()
-                                )[0].first;
-
+                                PtxToLlvmIrConverter::Module->getGlobalVariable(
+                                    sourceOpName
+                                );
+                            
                             llvm::GlobalValue* globVarLlvmValue =
                                 llvm::cast<llvm::GlobalValue>(llvmValue);
 
@@ -1418,8 +1453,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         // Create phi node for possible induction variable, if the source
         // and dest registers are the same
@@ -1431,7 +1465,10 @@ void InstrStatement::ToLlvmIr() {
 
         llvm::Instruction* firstOperandInst = 
                 llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
-
+            
+        bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
+                           secondOperandValue->getType()->isFloatingPointTy();
+        
         if ((destName == firstSourceOpName) && !firstOperandInst) {
             llvm::BasicBlock* currBasicBlock
                 = PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1441,17 +1478,34 @@ void InstrStatement::ToLlvmIr() {
                 currBasicBlock
             );
 
-            sub = PtxToLlvmIrConverter::Builder->CreateSub(
-                phi,
-                secondOperandValue
-            );
+            if (isFloatInst) {
+                sub = PtxToLlvmIrConverter::Builder->CreateFSub(
+                    phi,
+                    secondOperandValue
+                );
+            }
+            else {
+                sub = PtxToLlvmIrConverter::Builder->CreateSub(
+                    phi,
+                    secondOperandValue
+                );
+            }
+
             phi->addIncoming(sub, currBasicBlock);
         }
         else {
-            sub = PtxToLlvmIrConverter::Builder->CreateSub(
-                firstOperandValue,
-                secondOperandValue
-            );
+            if (isFloatInst) {
+                sub = PtxToLlvmIrConverter::Builder->CreateFSub(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
+            else {
+                sub = PtxToLlvmIrConverter::Builder->CreateSub(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
         }
 
         llvm::BasicBlock* currBlock =
@@ -1464,8 +1518,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         // Create phi node for possible induction variable, if the source
         // and dest registers are the same
@@ -1478,6 +1531,9 @@ void InstrStatement::ToLlvmIr() {
         llvm::Instruction* firstOperandInst = 
                 llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
 
+        bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
+                           secondOperandValue->getType()->isFloatingPointTy();
+
         if ((destName == firstSourceOpName) && !firstOperandInst) {
             llvm::BasicBlock* currBasicBlock
                 = PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1487,17 +1543,34 @@ void InstrStatement::ToLlvmIr() {
                 currBasicBlock
             );
 
-            mul = PtxToLlvmIrConverter::Builder->CreateMul(
-                phi,
-                secondOperandValue
-            );
+            if (isFloatInst) {
+                mul = PtxToLlvmIrConverter::Builder->CreateFMul(
+                    phi,
+                    secondOperandValue
+                );
+            }
+            else {
+                mul = PtxToLlvmIrConverter::Builder->CreateMul(
+                    phi,
+                    secondOperandValue
+                );
+            }
+
             phi->addIncoming(mul, currBasicBlock);
         }
         else {
-            mul = PtxToLlvmIrConverter::Builder->CreateMul(
-                firstOperandValue,
-                secondOperandValue
-            );
+            if (isFloatInst) {
+                mul = PtxToLlvmIrConverter::Builder->CreateFMul(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
+            else {
+                mul = PtxToLlvmIrConverter::Builder->CreateMul(
+                    firstOperandValue,
+                    secondOperandValue
+                );
+            }
         }
 
         llvm::BasicBlock* currBlock =
@@ -1510,8 +1583,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         bool isSigned = Types.front()[0] == 's';
 
@@ -1526,6 +1598,9 @@ void InstrStatement::ToLlvmIr() {
         llvm::Instruction* firstOperandInst = 
                 llvm::dyn_cast<llvm::Instruction>(firstOperandValue);
 
+        bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
+                           secondOperandValue->getType()->isFloatingPointTy();
+
         if ((destName == firstSourceOpName) && !firstOperandInst) {
             llvm::BasicBlock* currBasicBlock
                 = PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1535,32 +1610,49 @@ void InstrStatement::ToLlvmIr() {
                 currBasicBlock
             );
 
-            if (isSigned) {    
-                div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+            if (isFloatInst) {
+                div = PtxToLlvmIrConverter::Builder->CreateFDiv(
                     phi,
                     secondOperandValue
                 );
             }
-            else {
-                div = PtxToLlvmIrConverter::Builder->CreateUDiv(
-                    phi,
-                    secondOperandValue
-                );
+            else {    
+                if (isSigned) {    
+                    div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+                        phi,
+                        secondOperandValue
+                    );
+                }
+                else {
+                    div = PtxToLlvmIrConverter::Builder->CreateUDiv(
+                        phi,
+                        secondOperandValue
+                    );
+                }
             }
+
             phi->addIncoming(div, currBasicBlock);
         }
         else {
-            if (isSigned) {
-                div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+            if (isFloatInst) {
+                div = PtxToLlvmIrConverter::Builder->CreateFDiv(
                     firstOperandValue,
                     secondOperandValue
                 );
             }
-            else {
-                div = PtxToLlvmIrConverter::Builder->CreateUDiv(
-                    firstOperandValue,
-                    secondOperandValue
-                );
+            else {    
+                if (isSigned) {
+                    div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+                        firstOperandValue,
+                        secondOperandValue
+                    );
+                }
+                else {
+                    div = PtxToLlvmIrConverter::Builder->CreateUDiv(
+                        firstOperandValue,
+                        secondOperandValue
+                    );
+                }
             }
         }
 
@@ -1574,8 +1666,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         llvm::Value* shl = PtxToLlvmIrConverter::Builder->CreateShl(
             firstOperandValue,
@@ -1592,8 +1683,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         llvm::Type *funcType = PtxToLlvmIrConverter::GetTypeMapping(
             Types[0]
@@ -1624,7 +1714,10 @@ void InstrStatement::ToLlvmIr() {
         llvm::FunctionCallee func =
             PtxToLlvmIrConverter::Module->getOrInsertFunction(funcName, ft);
         llvm::Value *call =
-            PtxToLlvmIrConverter::Builder->CreateCall(func);
+            PtxToLlvmIrConverter::Builder->CreateCall(
+                func,
+                {firstOperandValue, secondOperandValue}
+            );
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1636,8 +1729,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         llvm::Value* andInst = PtxToLlvmIrConverter::Builder->CreateAnd(
             firstOperandValue,
@@ -1654,8 +1746,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         llvm::Value* orInst = PtxToLlvmIrConverter::Builder->CreateOr(
             firstOperandValue,
@@ -1673,8 +1764,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         llvm::Value* mul = PtxToLlvmIrConverter::Builder->CreateMul(
             firstOperandValue,
@@ -1704,8 +1794,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         llvm::FastMathFlags fmf;
         fmf.setAllowContract();
@@ -1745,21 +1834,26 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* div = nullptr;
         llvm::Value* constOne = nullptr;
 
-        if (sourceOpType->isFloatingPointTy())
-            constOne = llvm::ConstantFP::get(sourceOpType,1.0);
-        else
-            constOne = llvm::ConstantInt::get(sourceOpType, 1);
-
-        if (sourceTypePrefix == 's') {
-            div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+        if (sourceOpType->isFloatingPointTy()) {
+            constOne = llvm::ConstantFP::get(sourceOpType, 1.0);
+            div = PtxToLlvmIrConverter::Builder->CreateFDiv(
                 constOne, sourceOpValue
             );
         }
         else {
-            div = PtxToLlvmIrConverter::Builder->CreateUDiv(
-                constOne, sourceOpValue
-            );
+            constOne = llvm::ConstantInt::get(sourceOpType, 1);
+            if (sourceTypePrefix == 's') {
+                div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+                    constOne, sourceOpValue
+                );
+            }
+            else {
+                div = PtxToLlvmIrConverter::Builder->CreateUDiv(
+                    constOne, sourceOpValue
+                );
+            }
         }
+
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1771,8 +1865,7 @@ void InstrStatement::ToLlvmIr() {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
         llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
-        if (firstOperandValue == nullptr || secondOperandValue == nullptr)
-            return;
+        assert(firstOperandValue && secondOperandValue);
 
         // get comparison operation
         llvm::ICmpInst::Predicate llvmPred =
@@ -2100,6 +2193,9 @@ void InstrStatement::ToLlvmIr() {
     // and generate call to roundeven intrinsic
     auto rnIter = std::find(Modifiers.begin(), Modifiers.end(), "rn");
     if (rnIter != Modifiers.end()) {
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
         llvm::Value* sourceOpValue = GetLlvmOperandValue(SourceOps[0]);
         
         llvm::Type *funcType = PtxToLlvmIrConverter::GetTypeMapping(
@@ -2107,27 +2203,62 @@ void InstrStatement::ToLlvmIr() {
         )(*PtxToLlvmIrConverter::Context);
 
         std::string funcTypeStr;
-        llvm::raw_string_ostream ostream(funcTypeStr);
-        funcType->print(ostream);
-        funcTypeStr = ostream.str();
+        llvm::raw_string_ostream funcStream(funcTypeStr);
+        funcType->print(funcStream);
+        funcTypeStr = funcStream.str();
+
+        std::string destTypeBitsStr = std::regex_replace(
+            Types[0],
+            std::regex("[a-z]+"),
+            std::string("$1")
+        );
+        int destTypeBits = stoi(destTypeBitsStr);
+
+        llvm::Value* callParamValue = sourceOpValue;
+        llvm::Type* floatType = nullptr;
+        if (sourceOpValue->getType()->isIntegerTy()) {
+            if (destTypeBits == 32)
+                floatType = llvm::Type::getFloatTy(*PtxToLlvmIrConverter::Context);
+            else
+                floatType = llvm::Type::getDoubleTy(*PtxToLlvmIrConverter::Context);
+
+            llvm::Value* itofp = nullptr;
+            if (Types[0][0] == 's') {    
+                itofp = PtxToLlvmIrConverter::Builder->CreateUIToFP(
+                    sourceOpValue, floatType
+                );
+            }
+            else {
+                itofp = PtxToLlvmIrConverter::Builder->CreateSIToFP(
+                    sourceOpValue, floatType
+                );
+            }
+            callParamValue = itofp;
+            genLlvmInstructions.push_back(
+                std::pair<llvm::Value*, llvm::BasicBlock*>(itofp, currBlock)
+            );
+        }
+
+        std::string sourceTypeStr = 'f' + destTypeBitsStr;
 
         std::vector<llvm::Type*> params;
-        params.push_back(sourceOpValue->getType());
+        if (floatType)
+            params.push_back(floatType);
+        else params.push_back(sourceOpValue->getType());
 
         llvm::FunctionType *ft = llvm::FunctionType::get(
             funcType,
+            params,
             false
         );
 
-        std::string funcName = "llvm.roundeven." + funcTypeStr;
+        std::string funcName = "llvm.roundeven." + sourceTypeStr;
 
         llvm::FunctionCallee func =
             PtxToLlvmIrConverter::Module->getOrInsertFunction(funcName, ft);
         llvm::Value *call =
-            PtxToLlvmIrConverter::Builder->CreateCall(func);
+            PtxToLlvmIrConverter::Builder->CreateCall(func, callParamValue);
 
-        llvm::BasicBlock* currBlock =
-            PtxToLlvmIrConverter::Builder->GetInsertBlock();
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(call, currBlock)
         );
