@@ -693,6 +693,9 @@ std::string ConvertToZ3Syntax(Value* value, bool isBitwiseOp) {
         if (isBitwiseOp)
             return ("((_ int2bv 32) %{" + value->getName().str() + "})");
 
+        // outs() << "Value to be converted:\n";
+        // value->print(outs());
+        // outs() << "\n\n";
         return ("%{" + value->getName().str() + "}");
     }
 }
@@ -712,10 +715,22 @@ std::string UnfoldValue(
         {"fsub",    "-"},
         {"mul",     "*"},
         {"fmul",    "*"},
-        {"div",     "/"},
+        {"udiv",    "/"},
+        {"sdiv",    "/"},
         {"fdiv",    "/"},
         {"and",     "bvand"},
         {"or",      "bvor"}
+    };
+
+    const std::map<std::string, std::string> llvmIntrinsicZ3Map {
+        {"llvm.umin.i32",   "min2"},
+        {"llvm.smin.s32",   "min2"},
+        {"llvm.umin.i64",   "min2"},
+        {"llvm.smin.s64",   "min2"},
+        {"llvm.umax.i32",   "max2"},
+        {"llvm.smax.s32",   "max2"},
+        {"llvm.umax.i64",   "max2"},
+        {"llvm.smax.s64",   "max2"}
     };
 
     visitedValues.insert(value);
@@ -744,34 +759,73 @@ std::string UnfoldValue(
         return value->getName().str();
     }
 
-    // std::string opcode = valueInst->getOpcodeName();
     std::string llvmOpcodeStr = valueInst->getOpcodeName();
     bool isInstInMap =
         llvmZ3OperationMap.find(llvmOpcodeStr) != llvmZ3OperationMap.end();
+
+    bool isValueInstBitwise = valueInst->isBitwiseLogicOp();
     
     if (isInstInMap) {
         std::string opcode = llvmZ3OperationMap.at(llvmOpcodeStr);
         unfoldedStr = "(" + opcode;
+    }
+    else if (valueInst->getOpcode() == Instruction::Call) {
+        // In case of a call instruction check if the call matches to an
+        // intrinsic and replace the intrinsic with the corresponding Z3 function
+        CallInst* valueInstCall = dyn_cast<CallInst>(valueInst);
+        Function* calledFunction = valueInstCall->getCalledFunction();
+
+        assert(calledFunction);
+
+        std::string funcName = calledFunction->getName().str();
+        bool isFuncInMap =
+            llvmIntrinsicZ3Map.find(funcName) != llvmIntrinsicZ3Map.end();
+        if (isFuncInMap) {
+            uint argNum = valueInstCall->arg_size();
+            std::string argValueStr = "";
+            for (int i = 0; i < argNum; ++i) {
+                Value* arg = valueInstCall->getArgOperand(i);
+                Instruction* argInst = dyn_cast<Instruction>(arg);
+
+                bool isArgInstBitwise = argInst && argInst->isBitwiseLogicOp();
+
+                if (isValueInstBitwise && !isArgInstBitwise)
+                    argValueStr += "((_ int2bv 32) ";
+                argValueStr += UnfoldValue(
+                    arg,
+                    decls,
+                    visitedValues,
+                    false
+                );
+                if (isValueInstBitwise && !isArgInstBitwise) argValueStr += ")";
+            }
+
+            std::string opcode = llvmIntrinsicZ3Map.at(funcName);
+            unfoldedStr += "(" + opcode + " " + argValueStr + ") ";
+
+            return unfoldedStr;
+        }
     }
 
     // visit the instruction's operands
     uint operandNum = valueInst->getNumOperands();
     for (uint i = 0; i < operandNum; ++i) {
         Value* operand = valueInst->getOperand(i);
-        outs() << "Operand:\n";
-        operand->print(outs());
-        outs() << "\n";
+        llvm::Instruction* operandInst = dyn_cast<Instruction>(operand);
+        bool isOperandInstBitwise = operandInst && operandInst->isBitwiseLogicOp();
+        // outs() << "Operand:\n";
+        // operand->print(outs());
+        // outs() << "\n";
         std::string opValueStr = "";
-        if (visitedValues.find(operand) == visitedValues.end()) {
-            opValueStr = UnfoldValue(
-                operand,
-                decls,
-                visitedValues,
-                // loopVarsMap,
-                valueInst->isBitwiseLogicOp()
-            );
-        }
-        else opValueStr = ConvertToZ3Syntax(operand, valueInst->isBitwiseLogicOp());
+        if (isValueInstBitwise && !isOperandInstBitwise)
+            opValueStr = "((_ int2bv 32) ";
+        opValueStr += UnfoldValue(
+            operand,
+            decls,
+            visitedValues,
+            false
+        );
+        if (isValueInstBitwise && !isOperandInstBitwise) opValueStr += ")";
 
         // Check if the operand instruction is a bitwise operation
         // and convert the value if the current instruction not a bitwise
@@ -1017,8 +1071,13 @@ int main() {
         std::set<std::string> constraints;
         // Get loop bound constraints
         for (BasicBlock &bb : func) {
+            outs() << "Block: " << bb.getName() << "\n";
             Loop* loop = loopInfo.getLoopFor(&bb);
             if (!loop) continue;
+
+            outs() << "Compare Inst: ";
+            loop->getLatchCmpInst()->print(outs());
+            outs() << "\n\n";
 
             // Generate or get loop variable
             Value* indVar = loop->getInductionVariable(se);
@@ -1028,6 +1087,11 @@ int main() {
                 indVar->setName(loopVarName);
             }
             else loopVarName = indVar->getName();
+
+            // if loop already analyzed, continue to the next
+            if(std::find(generatedVars.begin(), generatedVars.end(), loopVarName) != generatedVars.end())
+                continue;
+
             // if (loopIndValuesMap.find(indVar) != loopIndValuesMap.end()) {
             //     loopVarName = loopIndValuesMap.at(indVar);
             // }
@@ -1044,12 +1108,12 @@ int main() {
 
             Instruction* initialValueInst = dyn_cast<Instruction>(initialValue);
             Instruction* finalValueInst = dyn_cast<Instruction>(finalValue);
-            // outs() << "Initial value: ";
-            // initialValue->print(outs());
-            // outs() << "\n";
-            // outs() << "Final value: ";
-            // finalValue->print(outs());
-            // outs() << "\n";
+            outs() << "Initial value: ";
+            initialValue->print(outs());
+            outs() << "\n";
+            outs() << "Final value: ";
+            finalValue->print(outs());
+            outs() << "\n";
             std::string initialValueStr;
             std::string finalValueStr;
             std::set<Value*>visitedValues;
@@ -1078,20 +1142,90 @@ int main() {
 
             // Find loop step
             PHINode* indVarPhi = dyn_cast<PHINode>(indVar);
-            Value* stepValue = indVarPhi->getIncomingValueForBlock(&bb);
+            outs() << "Induction Var:\n";
+            indVarPhi->print(outs());
+            outs() << "\n";
+            // Value* stepValue = indVarPhi->getIncomingValueForBlock(&bb);
+            uint indPhiNumValues = indVarPhi->getNumIncomingValues();
+            Value* stepValue = indVarPhi->getIncomingValue(indPhiNumValues - 1);
             Instruction* stepInst = dyn_cast<Instruction>(stepValue);
-            ConstantInt* stepValueInt = dyn_cast<ConstantInt>(
-                stepInst->getOperand(1)
-            );
-            std::string stepValueStr = std::to_string(
-                std::abs(stepValueInt->getSExtValue())
-            );
+            Value* secOperand = stepInst->getOperand(1);
+            Instruction* secOperandInst = dyn_cast<Instruction>(secOperand);
+            outs() << "Step Inst:\n";
+            stepInst->print(outs());
+            outs() << "\n";
+            std::string stepValueStr = "";
+            ConstantInt* stepValueInt = dyn_cast<ConstantInt>(secOperand);
+            if (stepValueInt) {
+                stepValueStr = std::to_string(
+                    std::abs(stepValueInt->getSExtValue())
+                );
+            }
+            else {
+                visitedValues.clear();
+                if (secOperandInst && secOperandInst->isBitwiseLogicOp()) {
+                    stepValueStr =
+                        "(bv2int " +
+                        UnfoldValue(secOperand, &decls, visitedValues) +
+                        ")";
+                }
+                else {
+                    stepValueStr = UnfoldValue(secOperand, &decls, visitedValues);
+                }
+            }
             // Number of loops, taken by the initial/final value of the loop
             // variable divided by the step value
             std::string loopNumExpr;
 
             std::string constraint;
             generatedVars.push_back(loopVarName);
+
+            // If the pass didn't found the loop direction, infer it by
+            // the comparison instruction's condition
+            if (loopDirection == Loop::LoopBounds::Direction::Unknown) {
+                CmpInst* loopCompInst = loop->getLatchCmpInst();
+                llvm::BasicBlock* trueBlock = nullptr;
+                llvm::BasicBlock* falseBlock = nullptr;
+                Instruction* nextInst = loopCompInst->getNextNode();
+                BranchInst* brInst = dyn_cast<BranchInst>(nextInst);
+                if (brInst) {
+                    trueBlock = brInst->getSuccessor(0);
+                    falseBlock = brInst->getSuccessor(1);
+                }
+                CmpInst::Predicate compPred = loopCompInst->getPredicate();
+                if (
+                    compPred == CmpInst::Predicate::ICMP_SLE    ||
+                    compPred == CmpInst::Predicate::ICMP_SLT    ||
+                    compPred == CmpInst::Predicate::ICMP_ULE    ||
+                    compPred == CmpInst::Predicate::ICMP_ULT
+                ) {
+                    if (trueBlock && falseBlock) {
+                        if (trueBlock->getName() == bb.getName())
+                            loopDirection = Loop::LoopBounds::Direction::Increasing;
+                        else
+                            loopDirection = Loop::LoopBounds::Direction::Decreasing;
+                    }
+                }
+                else if (
+                    compPred == CmpInst::Predicate::ICMP_SGE    ||
+                    compPred == CmpInst::Predicate::ICMP_SGT    ||
+                    compPred == CmpInst::Predicate::ICMP_UGE    ||
+                    compPred == CmpInst::Predicate::ICMP_UGT
+                ) {
+                    if (trueBlock && falseBlock) {
+                        if (trueBlock->getName() == bb.getName())
+                            loopDirection = Loop::LoopBounds::Direction::Decreasing;
+                        else
+                            loopDirection = Loop::LoopBounds::Direction::Increasing;
+                    }
+                }
+
+                if (loopDirection == Loop::LoopBounds::Direction::Increasing)
+                    outs() << "\033[1;31mLoop direction increasing\033[0m\n";
+                else if (loopDirection == Loop::LoopBounds::Direction::Decreasing)
+                    outs() << "\033[1;31mLoop direction decreasing\033[0m\n";
+            }
+
             if (loopDirection == Loop::LoopBounds::Direction::Increasing) {
                 loopNumExpr =
                     "(ceiling (/ " + finalValueStr + " " + 
@@ -1099,7 +1233,7 @@ int main() {
                 constraint =
                     "<= " + initialValueStr + " " + loopVarName + " " + finalValueStr;
             }
-            if (loopDirection == Loop::LoopBounds::Direction::Decreasing) {
+            else if (loopDirection == Loop::LoopBounds::Direction::Decreasing) {
                 loopNumExpr =
                     "(ceiling (/ " + initialValueStr + " " + 
                     stepValueStr + "))";
@@ -1113,33 +1247,46 @@ int main() {
             
             // Fixed values for testing
             ///////////// TEMP
+            for (llvm::Argument &arg : func.args()) {
+                if (arg.getType()->isIntegerTy()) {
+                    constraint = std::regex_replace(
+                        constraint,
+                        std::regex("%\\{"+arg.getName().str()+"\\}"),
+                        "1000000"
+                    );
+                }    
+            }
+            // constraint = std::regex_replace(
+            //     constraint,
+            //     std::regex("%\\{_Z9incKernelPiS_i_param_2\\}"),
+            //     "1000000"
+            // );
             constraint = std::regex_replace(
                 constraint,
-                std::regex("%\\{_Z9incKernelPiS_i_param_2\\}"),
-                "1000000"
-            );
-            constraint = std::regex_replace(
-                constraint,
-                std::regex("%\\{llvm.nvvm.read.ptx.sreg.ctaid.x\\}"),
+                std::regex("%\\{llvm.nvvm.read.ptx.sreg.ctaid.*?\\}"),
                 "100"
             );
             constraint = std::regex_replace(
                 constraint,
-                std::regex("%\\{llvm.nvvm.read.ptx.sreg.ntid.x\\}"),
+                std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.nctaid.*?\\}"),
                 "1000"
             );
             constraint = std::regex_replace(
                 constraint,
-                std::regex("%\\{llvm.nvvm.read.ptx.sreg.tid.x\\}"),
+                std::regex("%\\{llvm.nvvm.read.ptx.sreg.ntid.*?\\}"),
+                "1000"
+            );
+            constraint = std::regex_replace(
+                constraint,
+                std::regex("%\\{llvm.nvvm.read.ptx.sreg.tid.*?\\}"),
                 "10"
             );
             /////////////
 
-            constraints.insert(constraint);
-
-            // Find number of loops to be executed
-            outs() << "Loop variable:\n";
-            outs() << "\n";
+            if (constraint != "") {
+                constraints.insert(constraint);
+                outs() << "\nLoop constraint: " << constraint << "\n\n";
+            }
 
             // Get array access constraints
             outs() << "\nIndices:\n";
@@ -1174,29 +1321,46 @@ int main() {
                         "<= 0 (* " + loopNumExpr + " " + indexStr +") 1000000";
 
                     ///////////// TEMP
+                    for (llvm::Argument &arg : func.args()) {
+                        if (arg.getType()->isIntegerTy()) {
+                            constraint = std::regex_replace(
+                                constraint,
+                                std::regex("%\\{"+arg.getName().str()+"\\}"),
+                                "1000000"
+                            );
+                        }    
+                    }
+                    // constraint = std::regex_replace(
+                    //     constraint,
+                    //     std::regex("%\\{_Z9incKernelPiS_i_param_2\\}"),
+                    //     "1000000"
+                    // );
                     constraint = std::regex_replace(
                         constraint,
-                        std::regex("%\\{_Z9incKernelPiS_i_param_2\\}"),
-                        "1000000"
-                    );
-                    constraint = std::regex_replace(
-                        constraint,
-                        std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.ctaid\\.x\\}"),
+                        std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.ctaid.*?\\}"),
                         "100"
                     );
                     constraint = std::regex_replace(
                         constraint,
-                        std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.ntid\\.x\\}"),
+                        std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.nctaid.*?\\}"),
                         "1000"
                     );
                     constraint = std::regex_replace(
                         constraint,
-                        std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.tid\\.x\\}"),
+                        std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.ntid.*?\\}"),
+                        "1000"
+                    );
+                    constraint = std::regex_replace(
+                        constraint,
+                        std::regex("%\\{llvm\\.nvvm\\.read\\.ptx\\.sreg\\.tid.*?\\}"),
                         "10"
                     );
                     /////////////
 
-                    constraints.insert(constraint);
+                    if (constraint != "") {    
+                        constraints.insert(constraint);
+                        outs() << "Array constraint: " << constraint << "\n\n";
+                    }
                     // outs() << "\n";
                 }
 
@@ -1286,8 +1450,11 @@ int main() {
         //     case z3::unknown: outs() << "No result\n"; break;
         // }
 
+        // define ceiling, min and max functions
         std::string z3Expr = "(define-fun ceiling ((x Real)) Int"
-            "(ite (>= (- x (to_real (to_int x))) 0.0) (to_int x) (+ (to_int x) 1)))";
+            "(ite (>= (- x (to_real (to_int x))) 0.0) (to_int x) (+ (to_int x) 1)))\n";
+        z3Expr += "(define-fun min2((x Int) (y Int)) Int (ite (< x y) x y))\n";
+        z3Expr += "(define-fun max2((x Int) (y Int)) Int (ite (> x y) x y))\n";
         // Keep unique declarations and add them in z3 expression
         // std::unique(decls.begin(), decls.end());
         // for (std::string decl : decls)
@@ -1295,7 +1462,7 @@ int main() {
         for (std::string constraint : constraints) {
             // z3::expr_vector expression = solverContext.parse_string(constraint.c_str());
             // solver.add(expression);
-            z3Expr += "(assert (" + constraint + "))";
+            z3Expr += "(assert (" + constraint + "))\n";
         }
         z3Expr += "(check-sat)";
         // solver.from_string(z3Expr.c_str());
@@ -1307,7 +1474,7 @@ int main() {
             // z3::expr_vector expr = solverContext.parse_string("(declare-const i Int)(assert(< 0 i (bv2int (bvand ((_ int2bv 32) 16) ((_ int2bv 32) 3)))))");
             std::string decls = "";
             for (std::string loopVar : generatedVars)
-                decls += "(declare-const " + loopVar + " Int)";
+                decls += "(declare-const " + loopVar + " Int)\n";
 
             z3Expr = decls + z3Expr;
             outs() << "expr: " << z3Expr << "\n";

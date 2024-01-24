@@ -1340,108 +1340,108 @@ void InstrStatement::ToLlvmIr() {
                                 llvm::cast<llvm::GlobalValue>(llvmValue);
 
                             llvm::Type* valueType = globVarLlvmValue->getValueType();
-                            if (!valueType->isArrayTy()) return;
+                            if (valueType->isArrayTy()) {
+                                uint numElements = valueType->getArrayNumElements();
+                                llvm::Type* elemType = valueType->getArrayElementType();
+                                
+                                uint newElemTypeSize;
+                                if (writeInst->getInst() == "mul")
+                                    newElemTypeSize = writeInstValue;
+                                else
+                                    newElemTypeSize = 1 << writeInstValue;
 
-                            uint numElements = valueType->getArrayNumElements();
-                            llvm::Type* elemType = valueType->getArrayElementType();
-                            
-                            uint newElemTypeSize;
-                            if (writeInst->getInst() == "mul")
-                                newElemTypeSize = writeInstValue;
-                            else
-                                newElemTypeSize = 1 << writeInstValue;
+                                uint newElemTypeSizeBits = newElemTypeSize * 8;
 
-                            uint newElemTypeSizeBits = newElemTypeSize * 8;
-
-                            llvm::ArrayType* newType;
-                            if (elemType->getTypeID() == llvm::Type::VoidTyID) {
-                                newType = llvm::ArrayType::get(
-                                    PtxToLlvmIrConverter::Builder->getIntNTy(
-                                        newElemTypeSizeBits
-                                    ),
-                                    numElements
-                                );
-                            }
-                            else {
-                                llvm::TypeSize elemTypeSize =
-                                PtxToLlvmIrConverter::Module->getDataLayout()
-                                    .getTypeAllocSize(elemType);
-                                uint64_t elemTypeSizeInt = elemTypeSize.getFixedSize();
-                                uint rowSize = elemTypeSizeInt / newElemTypeSize;
-                                uint numOfRows = numElements / (rowSize * newElemTypeSize);
-
-                                if (numOfRows != 0) {
+                                llvm::ArrayType* newType;
+                                if (elemType->getTypeID() == llvm::Type::VoidTyID) {
                                     newType = llvm::ArrayType::get(
-                                        llvm::ArrayType::get(
-                                            llvm::Type::getIntNTy(
-                                                *PtxToLlvmIrConverter::Context,
-                                                newElemTypeSizeBits
-                                            ),
-                                            rowSize
+                                        PtxToLlvmIrConverter::Builder->getIntNTy(
+                                            newElemTypeSizeBits
                                         ),
-                                        numOfRows
+                                        numElements
                                     );
                                 }
+                                else {
+                                    llvm::TypeSize elemTypeSize =
+                                    PtxToLlvmIrConverter::Module->getDataLayout()
+                                        .getTypeAllocSize(elemType);
+                                    uint64_t elemTypeSizeInt = elemTypeSize.getFixedSize();
+                                    uint rowSize = elemTypeSizeInt / newElemTypeSize;
+                                    uint numOfRows = numElements / (rowSize * newElemTypeSize);
 
-                            }
+                                    if (numOfRows != 0) {
+                                        newType = llvm::ArrayType::get(
+                                            llvm::ArrayType::get(
+                                                llvm::Type::getIntNTy(
+                                                    *PtxToLlvmIrConverter::Context,
+                                                    newElemTypeSizeBits
+                                                ),
+                                                rowSize
+                                            ),
+                                            numOfRows
+                                        );
+                                    }
 
-                            // newType->print(llvm::outs(), true);
+                                }
 
-                            if (
-                                newType && 
-                                (newType != globVarLlvmValue->getValueType())
-                            ) {
-                                llvm::GlobalValue::LinkageTypes
-                                    globVarLinkage = globVarLlvmValue->getLinkage();
-                                llvm::StringRef globVarName =
-                                    globVarLlvmValue->getName();
-                                llvm::GlobalValue::ThreadLocalMode globVartlm =
-                                        globVarLlvmValue->getThreadLocalMode();
-                                uint globVarAddrSpace =
-                                    globVarLlvmValue->getAddressSpace();
+                                // newType->print(llvm::outs(), true);
 
-                                int alignment;
                                 if (
-                                    llvm::GlobalVariable* globVar =
-                                        llvm::dyn_cast<llvm::GlobalVariable>(globVarLlvmValue)
+                                    newType && 
+                                    (newType != globVarLlvmValue->getValueType())
                                 ) {
-                                    alignment = globVar->getAlignment();
+                                    llvm::GlobalValue::LinkageTypes
+                                        globVarLinkage = globVarLlvmValue->getLinkage();
+                                    llvm::StringRef globVarName =
+                                        globVarLlvmValue->getName();
+                                    llvm::GlobalValue::ThreadLocalMode globVartlm =
+                                            globVarLlvmValue->getThreadLocalMode();
+                                    uint globVarAddrSpace =
+                                        globVarLlvmValue->getAddressSpace();
+
+                                    int alignment;
+                                    if (
+                                        llvm::GlobalVariable* globVar =
+                                            llvm::dyn_cast<llvm::GlobalVariable>(globVarLlvmValue)
+                                    ) {
+                                        alignment = globVar->getAlignment();
+                                    }
+
+                                    // globVarLlvmValue->replaceAllUsesWith(
+                                    //     newGlobalVarValue
+                                    // );
+                                    globVarLlvmValue->eraseFromParent();
+
+                                    llvm::GlobalVariable* newGlobalVarValue =
+                                        new llvm::GlobalVariable(
+                                            *PtxToLlvmIrConverter::Module,
+                                            newType,
+                                            false,
+                                            globVarLinkage,
+                                            llvm::Constant::getNullValue(newType),
+                                            globVarName,
+                                            nullptr,
+                                            globVartlm,
+                                            globVarAddrSpace
+                                        );
+                                    newGlobalVarValue->setAlignment(
+                                        llvm::MaybeAlign(alignment)
+                                    );
+
+                                    std::vector<std::pair<llvm::Value*,
+                                                        llvm::BasicBlock*>>
+                                        newLlvmInstValueMap;
+                                    std::pair<llvm::Value *, llvm::BasicBlock*>
+                                        valueBlockPair(
+                                            newGlobalVarValue,
+                                            currBlock
+                                        );
+                                    newLlvmInstValueMap.push_back(valueBlockPair);
+                                    PtxToLlvmIrConverter::setPtxToLlvmMapValue(
+                                        currInst->getId(),
+                                        newLlvmInstValueMap
+                                    );
                                 }
-
-                                // globVarLlvmValue->replaceAllUsesWith(
-                                //     newGlobalVarValue
-                                // );
-                                globVarLlvmValue->eraseFromParent();
-
-                                llvm::GlobalVariable* newGlobalVarValue =
-                                    new llvm::GlobalVariable(
-                                        *PtxToLlvmIrConverter::Module,
-                                        newType,
-                                        false,
-                                        globVarLinkage,
-                                        llvm::Constant::getNullValue(newType),
-                                        globVarName,
-                                        nullptr,
-                                        globVartlm,
-                                        globVarAddrSpace
-                                    );
-                                newGlobalVarValue->setAlignment(
-                                    llvm::MaybeAlign(alignment)
-                                );
-
-                                std::vector<std::pair<llvm::Value*,
-                                                      llvm::BasicBlock*>>
-                                    newLlvmInstValueMap;
-                                std::pair<llvm::Value *, llvm::BasicBlock*>
-                                    valueBlockPair(
-                                        newGlobalVarValue,
-                                        currBlock
-                                    );
-                                newLlvmInstValueMap.push_back(valueBlockPair);
-                                PtxToLlvmIrConverter::setPtxToLlvmMapValue(
-                                    currInst->getId(),
-                                    newLlvmInstValueMap
-                                );
                             }
                         }
                     }
@@ -1980,6 +1980,9 @@ void InstrStatement::ToLlvmIr() {
         // If in loop, iterate through loop statements again and apply fixes
         if (labelExistsBeforeInst) {
             bool inCurrBlock = false;
+            bool skipBlock = false;
+            int innerLoopTermId = -1;
+            uint iterCount = 0;
             for (const auto stmt : currKernel->getBodyStatements()) {
                 uint stmtId = stmt->getId();
                 if (stmtId >= this->getId()) break;
@@ -1988,6 +1991,32 @@ void InstrStatement::ToLlvmIr() {
                     inCurrBlock = true;
                 // find current block
                 if (!inCurrBlock) continue;
+
+                if (stmt->getId() > innerLoopTermId) {
+                    innerLoopTermId = -1;
+                    skipBlock = false;
+                }
+
+                // Skip nested loops
+                if (!skipBlock && iterCount > 0) {
+                    for (const auto loopStmt : currKernel->getBodyStatements()) {
+                        if (loopStmt->getId() < stmt->getId()) continue;
+                        InstrStatement* instStmt =
+                            dynamic_cast<InstrStatement*>(loopStmt.get());
+                        if (!instStmt) continue;
+                        if (instStmt->getInst() == "bra") {
+                            std::string braSourceOp = std::get<std::string>(
+                                instStmt->getDestOps()[0]->getValue()
+                            );
+                            if (stmt->getLabel() == braSourceOp) {
+                                skipBlock = true;
+                                innerLoopTermId = instStmt->getId();
+                            }
+                        }
+                    }
+                }
+
+                if (skipBlock) continue;
 
                 // skip if not an instruction or has no source operands
                 InstrStatement* instStmt =
@@ -2019,16 +2048,28 @@ void InstrStatement::ToLlvmIr() {
 
                     if (!llvmInst) continue;
 
+                    // Find loop block
+                    llvm::BasicBlock* loopBlock = nullptr;
+                    for (llvm::BasicBlock &bb : *kernelFunc) {
+                        std::string bbName = bb.getName().str();
+                        if (bbName == "") continue;
+                        if (bbName == targetValue)
+                            loopBlock = &bb;
+                    }
+
+                    // Avoid adding duplicate phi nodes
                     bool phiExists = false;
-                    for (llvm::PHINode &phiNode : currBasicBlock->phis()) {
-                        phiExists = phiNode.getIncomingValueForBlock(currBasicBlock) == llvmInst;
+                    for (llvm::PHINode &phiNode : loopBlock->phis()) {
+                        phiExists = phiNode.getIncomingValueForBlock(loopBlock) == llvmInst;
                     }
 
                     if (phiExists) continue;
 
+                    assert(loopBlock);
+
                     llvm::PHINode* phi = CreatePhiInBlockStart(
                         llvmInst->getOperand(0),
-                        currBasicBlock
+                        loopBlock
                     );
 
                     // update first operand with phi node and add this value
@@ -2115,6 +2156,7 @@ void InstrStatement::ToLlvmIr() {
                         // llvmInst->setOperand(0, phi);
                     }
                 }
+                iterCount++;
             }
         }
     }
