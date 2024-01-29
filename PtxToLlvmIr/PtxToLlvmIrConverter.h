@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/NoFolder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Type.h"
 
@@ -42,7 +43,7 @@ class PtxToLlvmIrConverter {
   public:
 
     static std::unique_ptr<llvm::LLVMContext> Context;
-    static std::unique_ptr<llvm::IRBuilder<>> Builder;
+    static std::unique_ptr<llvm::IRBuilder<llvm::NoFolder>> Builder;
     static std::unique_ptr<llvm::Module> Module;
 
     static void Initialize();

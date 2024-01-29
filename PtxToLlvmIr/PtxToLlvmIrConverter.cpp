@@ -25,13 +25,13 @@ std::unordered_map<int, std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>>
 PtxToLlvmIrConverter::PtxToLlvmMap;
 
 std::unique_ptr<llvm::LLVMContext> PtxToLlvmIrConverter::Context;
-std::unique_ptr<llvm::IRBuilder<>> PtxToLlvmIrConverter::Builder;
+std::unique_ptr<llvm::IRBuilder<llvm::NoFolder>> PtxToLlvmIrConverter::Builder;
 std::unique_ptr<llvm::Module> PtxToLlvmIrConverter::Module;
 
 void PtxToLlvmIrConverter::Initialize() {
     Context = std::make_unique<llvm::LLVMContext>();
     Module = std::make_unique<llvm::Module>("LLVM Module", *Context);
-    Builder = std::make_unique<llvm::IRBuilder<>>(*Context);
+    Builder = std::make_unique<llvm::IRBuilder<llvm::NoFolder>>(*Context);
 }
 
 std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>
