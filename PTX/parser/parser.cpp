@@ -924,6 +924,7 @@ int main() {
 
             if (currInst->getNumOperands() == 0) continue;
 
+            // currInst->print(outs());
             llvm::Value* firstOperand = currInst->getOperand(0);
             Type::TypeID firstOperandTypeId = firstOperand->getType()->getTypeID();
 

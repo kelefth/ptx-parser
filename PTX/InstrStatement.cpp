@@ -166,15 +166,21 @@ bool InstrStatement::isBlockInPredecessors(
     return false;
 }
 
-bool isInSuccessors(llvm::BasicBlock* block, llvm::BasicBlock *blockToFind) {
-    
+bool isInSuccessors(
+    llvm::BasicBlock* block,
+    llvm::BasicBlock *blockToFind,
+    std::vector<llvm::BasicBlock*> visitedBlocks
+) {
+    visitedBlocks.push_back(block);
     if (block == blockToFind) return true;
 
     for (auto succIt = succ_begin(block), succEnd = succ_end(block); succIt != succEnd; ++succIt) {
         if (*succIt == block) continue;
 
         llvm::BasicBlock* successorBlock = *succIt;
-        return isInSuccessors(successorBlock, blockToFind);
+        if(std::find(visitedBlocks.begin(), visitedBlocks.end(), successorBlock) != visitedBlocks.end())
+            continue;
+        return isInSuccessors(successorBlock, blockToFind, visitedBlocks);
     }
 
     return false;
@@ -194,7 +200,8 @@ llvm::PHINode* InstrStatement::CheckAndGeneratePhiNode(
     llvm::pred_iterator pred = llvm::pred_begin(currBlock);
     llvm::pred_iterator end = llvm::pred_end(currBlock);
     for (pred; pred != end; ++pred) {
-        if (isInSuccessors(llvmStmtBlock, *pred)) {
+        std::vector<llvm::BasicBlock*> visitedBlocks;
+        if (isInSuccessors(llvmStmtBlock, *pred, visitedBlocks)) {
             // Check if an incoming value from the same block already exists,
             // and if yes the phi node must be inserted into a predecessor
             bool isPhiInPred = false;
@@ -402,37 +409,20 @@ llvm::Value* InstrStatement::GetLlvmOperandValue(
 
 llvm::Constant* InstrStatement::GetLlvmImmediateValue(double value) {
     bool isSigned = false;
+
+    char typePrefix = Types[0][0];
     // if signed
-    if (Types[0][0] == 's')
+    if (typePrefix == 's')
         isSigned = true;
 
-    // check if integer or float
-    if (Types[0][0] != 'f') {
-        std::string nbitsStr = std::regex_replace(
-            Types[0],
-            std::regex("[a-z]+"),
-            std::string("$1")
-        );
-        int nbits = stoi(nbitsStr);
+    llvm::Type* type = PtxToLlvmIrConverter::GetTypeMapping(
+        Types[0]
+    )(*PtxToLlvmIrConverter::Context);
 
-        llvm::Type *type = llvm::Type::getIntNTy(
-            *PtxToLlvmIrConverter::Context,
-            nbits
-        );
-
-        return llvm::ConstantInt::get(
-            type,
-            value,
-            isSigned
-        );
-    }
-    else {
-        llvm::Type *type = llvm::Type::getFloatTy(
-            *PtxToLlvmIrConverter::Context
-        );
-
+    if (type->isFloatingPointTy())
         return llvm::ConstantFP::get(type, value);
-    }
+    else
+        return llvm::ConstantInt::get(type, value, isSigned);
 }
 
 DirectStatement* InstrStatement::GetVar(std::string name) {
@@ -584,6 +574,27 @@ llvm::PHINode* InstrStatement::CreatePhiInBlockStart(
 void InstrStatement::ToLlvmIr() {
     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> genLlvmInstructions;
 
+    // Fix parameter types, if not address
+    if (Inst == "mul" || Inst == "shl" || Inst == "div" || Inst == "sub") {
+        llvm::Value* firstSourceOperand = GetLlvmOperandValue(SourceOps[0]);
+        llvm::Value* secSourceOperand = GetLlvmOperandValue(SourceOps[1]);
+
+        llvm::Type* firstOpType = firstSourceOperand->getType();
+        llvm::Type* secOpType = secSourceOperand->getType();
+
+        llvm::Type* intType = llvm::Type::getInt64Ty(
+            *PtxToLlvmIrConverter::Context
+        );
+
+        if (firstOpType->getTypeID() == llvm::Type::PointerTyID) {
+            firstSourceOperand->mutateType(intType);
+        }
+
+        if (secOpType->getTypeID() == llvm::Type::PointerTyID) {
+            secSourceOperand->mutateType(intType);
+        }
+    }
+
     // if instruction has a label, change IR insert point
     std::string label = getLabel();
     if (label != "") {
@@ -687,14 +698,17 @@ void InstrStatement::ToLlvmIr() {
         llvm::BasicBlock* insertBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
         std::vector<llvm::BasicBlock*> blocksToRemove;
+
+        PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+
         for (auto bbIt = currFunction->begin(); bbIt != currFunction->end(); ++bbIt) {
             llvm::BasicBlock &bb = *bbIt;
-            if (bb.getTerminator() || (&bb == insertBlock) || bb.hasName())
+            if (bb.getTerminator() || (&bb == insertBlock))
                 continue;
 
             auto bbItNext = std::next(bbIt);
 
-            if (bb.empty()) {
+            if (bb.empty() && !bb.hasName()) {
                 blocksToRemove.push_back(&bb);
                 if (bbItNext != currFunction->end()) {
                     llvm::BasicBlock &nextBb = *bbItNext;
@@ -702,7 +716,11 @@ void InstrStatement::ToLlvmIr() {
                 }
             }
 
-            if (bbItNext != currFunction->end()) {
+            // If named block and instruction insertion has finished or unnamed
+            // block, add terminator
+            if ((bbItNext != currFunction->end()) && 
+                ((bb.hasName() && bb.size() > 0) || !bb.hasName())
+            ){
                 llvm::BasicBlock &nextBb = *bbItNext;
                 llvm::BranchInst* br = llvm::BranchInst::Create(&nextBb, &bb);
             }
@@ -970,8 +988,8 @@ void InstrStatement::ToLlvmIr() {
     else if (Inst == "cvt") {
         llvm::Value* sourceValue = GetLlvmOperandValue(SourceOps[0]);
 
-        std::string sourceType = Types[0];
-        std::string destType = Types[1];
+        std::string sourceType = Types[1];
+        std::string destType = Types[0];
         char sourceTypePrefix = sourceType[0];
         char destTypePrefix = destType[0];
 
@@ -992,28 +1010,32 @@ void InstrStatement::ToLlvmIr() {
         );
         int destTypeBits = stoi(destTypeBitsStr);
 
-        if ((sourceTypePrefix == destTypePrefix) &&
-            (destTypeBits == 2 * sourceTypeBits)
-        ) {
-            // Create zext or sext instruction
+        if (sourceTypePrefix == destTypePrefix) {
+            // Create zext, sext or trunc instruction
             llvm::Type* destLlvmType = PtxToLlvmIrConverter::GetTypeMapping(
                 destType
             )(*PtxToLlvmIrConverter::Context);
 
             // if instruction type is signed, create sext
-            llvm::Value* ext;
+            llvm::Value* extTrunc;
             if (sourceTypePrefix == 's') {
-                ext = PtxToLlvmIrConverter::Builder->CreateSExt(
+                extTrunc = PtxToLlvmIrConverter::Builder->CreateSExtOrTrunc(
                     sourceValue,
                     destLlvmType
                 );
             }
             else {
-                ext = PtxToLlvmIrConverter::Builder->CreateZExt(
+                extTrunc = PtxToLlvmIrConverter::Builder->CreateZExtOrTrunc(
                     sourceValue,
                     destLlvmType
                 );
             }
+
+            llvm::BasicBlock* currBlock =
+                PtxToLlvmIrConverter::Builder->GetInsertBlock();
+            genLlvmInstructions.push_back(
+                std::pair<llvm::Value*, llvm::BasicBlock*>(extTrunc, currBlock)
+            );
         }
     }
     else if (Inst == "mov") {
@@ -1889,8 +1911,6 @@ void InstrStatement::ToLlvmIr() {
         // remove @ from pred
         Pred = Pred.erase(0,1);
 
-        llvm::Value* cond = GetLlvmRegisterValue(Pred);
-
         // get name of current kernel, in order to add
         // the block targets of the branch to this kernel
         std::unique_ptr currKernel = GetCurrentKernel();
@@ -1903,13 +1923,16 @@ void InstrStatement::ToLlvmIr() {
         llvm::BasicBlock* currBasicBlock
             = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-        llvm::BasicBlock* falseBlock = llvm::BasicBlock::Create(
-            *PtxToLlvmIrConverter::Context,
-            "",
-            PtxToLlvmIrConverter::Module->getFunction(currKernelName)
-        );
+        llvm::BasicBlock* falseBlock = nullptr;
+        if (Pred != "") {
+            falseBlock = llvm::BasicBlock::Create(
+                *PtxToLlvmIrConverter::Context,
+                "",
+                PtxToLlvmIrConverter::Module->getFunction(currKernelName)
+            );
 
-        falseBlock->moveAfter(currBasicBlock);
+            falseBlock->moveAfter(currBasicBlock);
+        }
 
         std::string targetValue = std::get<std::string>(
             DestOps[0]->getValue()
@@ -1964,12 +1987,21 @@ void InstrStatement::ToLlvmIr() {
             );
         }
 
-        // set target as null for now, need to patch it later
-        llvm::Value* br = PtxToLlvmIrConverter::Builder->CreateCondBr(
-            cond,
-            trueBlock,
-            falseBlock
-        );
+        // Check if conditional branch or not
+        llvm::Value* br = nullptr;
+        if (falseBlock) {
+            // set target as null for now, need to patch it later
+            llvm::Value* cond = GetLlvmRegisterValue(Pred);
+            br = PtxToLlvmIrConverter::Builder->CreateCondBr(
+                cond,
+                trueBlock,
+                falseBlock
+            );
+        }
+        else br = PtxToLlvmIrConverter::Builder->CreateBr(trueBlock);
+
+        br->print(llvm::outs());
+        llvm::outs() << "\n";
 
         PtxToLlvmIrConverter::Builder->SetInsertPoint(falseBlock);
 
@@ -2060,7 +2092,8 @@ void InstrStatement::ToLlvmIr() {
                     // Avoid adding duplicate phi nodes
                     bool phiExists = false;
                     for (llvm::PHINode &phiNode : loopBlock->phis()) {
-                        phiExists = phiNode.getIncomingValueForBlock(loopBlock) == llvmInst;
+                        if (phiNode.getBasicBlockIndex(loopBlock) >= 0)
+                            phiExists = phiNode.getIncomingValueForBlock(loopBlock) == llvmInst;
                     }
 
                     if (phiExists) continue;
