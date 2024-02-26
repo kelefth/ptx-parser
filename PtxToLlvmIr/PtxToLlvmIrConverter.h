@@ -40,6 +40,15 @@ class PtxToLlvmIrConverter {
         int, std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>>
         PtxToLlvmMap;
 
+    static std::map<
+        llvm::BasicBlock*, std::map<std::string, llvm::Value*>
+    > RegToValueInMap;
+
+    static std::map<
+        llvm::BasicBlock*, std::map<std::string, llvm::Value*>
+    > RegToValueOutMap;
+
+
   public:
 
     static std::unique_ptr<llvm::LLVMContext> Context;
@@ -58,6 +67,54 @@ class PtxToLlvmIrConverter {
         std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> val
     );
     static void removePtxToLlvmMapValue(int stmtId);
+
+    static std::map<
+        llvm::BasicBlock*, std::map<std::string, llvm::Value*>
+    > getRegToValueInMaps();
+
+    static std::map<
+        llvm::BasicBlock*, std::map<std::string, llvm::Value*>
+    > getRegToValueOutMaps();
+
+    static llvm::Value*
+    getRegToValueInMapValue(llvm::BasicBlock* bb, std::string regName);
+
+    static void setRegToValueInMapValue(
+        llvm::BasicBlock* bb,
+        std::string regName,
+        llvm::Value* value
+    );
+
+    static void setRegToValueInMap(
+        llvm::BasicBlock* bb,
+        std::map<std::string, llvm::Value*> map
+    );
+
+    static std::map<std::string, llvm::Value*>
+    getRegToValueInMap(llvm::BasicBlock* bb);
+
+    static void clearRegToValueInMap(llvm::BasicBlock* bb);
+
+    static llvm::Value*
+    getRegToValueOutMapValue(llvm::BasicBlock* bb, std::string regName);
+
+    static void setRegToValueOutMapValue(
+        llvm::BasicBlock* bb,
+        std::string regName,
+        llvm::Value* value
+    );
+
+    static void setRegToValueOutMap(
+        llvm::BasicBlock* bb,
+        std::map<std::string, llvm::Value*> map
+    );
+
+    static std::map<std::string, llvm::Value*>
+    getRegToValueOutMap(llvm::BasicBlock* bb);
+
+    static void clearRegToValueOutMap(llvm::BasicBlock* bb);
+
+    static void UpdateMapsAndGeneratePhis(llvm::BasicBlock* bb);
 
     static llvm::ICmpInst::Predicate ConvertPtxToLlvmPred(std::string pred);
     static llvm::BasicBlock* GetBasicBlock(

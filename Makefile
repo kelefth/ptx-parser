@@ -46,7 +46,7 @@ all: make_builddir $(BUILDDIR)/ptx-parser
 $(BUILDDIR)/ptx-parser: $(OBJ_FILES)
 	$(CXX) $(CXXFLAGS) $^ $(LLVM_FLAGS) -lz3 -o $@
 
-$(BUILDDIR)/PtxToLlvmIrConverter.o: $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.h
+$(BUILDDIR)/PtxToLlvmIrConverter.o: $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.h $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.cpp
 	$(CXX) $(CXXFLAGS) -c $(SRC_PTXTOIR_DIR)/PtxToLlvmIrConverter.cpp $(LLVM_FLAGS) -o $@
 
 $(BUILDDIR)/lexer.o: $(SRC_PTX_LEXER_DIR)/lexer.h $(SRC_PTX_LEXER_DIR)/lexer.cpp

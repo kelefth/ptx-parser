@@ -456,9 +456,7 @@ void ParseVarDecDirectStatement() {
                                             return dynamic_cast<const KernelDirectStatement*>(stmt.get()) != nullptr;
                                         });
 
-    KernelDirectStatement* kernelStmtPtr = static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get());
-    unsigned int kernelId = kernelStmtPtr->getId();
-    kernelStmtPtr->AddBodyStatement(
+    std::shared_ptr<VarDecDirectStatement> varDecStmt =
         std::make_shared<VarDecDirectStatement>(
             IdCounter++,
             label,
@@ -468,9 +466,13 @@ void ParseVarDecDirectStatement() {
             type,
             identifier,
             size
-        )
-    );
-    
+        );
+
+    if (lastKernelStmtPtr != statements.rend()) {
+        KernelDirectStatement* kernelStmtPtr = static_cast<KernelDirectStatement*>(lastKernelStmtPtr->get());
+        kernelStmtPtr->AddBodyStatement(varDecStmt);
+    }
+    else statements.push_back(varDecStmt);
 }
 
 void ParseModuleDirectStatement() {
@@ -650,10 +652,10 @@ Instruction* FindMulShlInUses(
 ) {
     for (llvm::Use &use : uses) {
         Instruction* useInst = dyn_cast<Instruction>(use.get());
-
-        if (useInst == nullptr) continue;
-        
         uint instOpcode = useInst->getOpcode();
+
+        if (useInst == nullptr || instOpcode != Instruction::PHI) continue;
+        
         if (
             (instOpcode == Instruction::Mul || instOpcode == Instruction::Shl) &&
             dyn_cast<ConstantInt>(useInst->getOperand(1)) != nullptr
@@ -675,6 +677,106 @@ Instruction* FindMulShlInUses(
         
 //     }
 // }
+
+void FixValueUse(BasicBlock* bb, std::vector<BasicBlock*>* visitedBlocks) {
+    visitedBlocks->push_back(bb);
+
+    Function* func = bb->getParent();
+
+    bool inLoop = false;
+    BasicBlock* lastBlock = bb;
+    Instruction* lastLoopInst = nullptr;
+    inst_iterator instIt = inst_begin(func);
+    inst_iterator instEnd = inst_end(func);
+    for (instIt, instEnd; instIt != instEnd; ++instIt) {
+        Instruction* inst = &*instIt;
+        BasicBlock* instBlock = inst->getParent();
+        std::string instBlockName = instBlock->getName().str();
+
+        if (inst->getOpcode() == Instruction::PHI) {
+            if (instBlock->getName() == bb->getParent()->getName())
+                continue;
+        }
+
+        if (instBlock == bb) inLoop = true;
+        if (!inLoop) {
+            lastBlock = instBlock;
+            continue;
+        }
+
+        // Return if all the instruction in the loop has been visited
+        BranchInst* braInst = dyn_cast<BranchInst>(inst);
+        if (braInst) {
+            uint braSuccsNum = braInst->getNumSuccessors();
+            if (
+                braInst->getSuccessor(0)->getName() == bb->getName() ||
+                (braSuccsNum > 1 && braInst->getSuccessor(1)->getName() == bb->getName())
+            ) {
+                return;
+            }
+        }
+
+        // if (inst->getOpcode() == Instruction::PHI) continue;
+
+        bool isLoop = false;
+        bool inInnerBlock = false;
+        BranchInst* bra = nullptr;
+        if ((instBlock != bb) && (instBlock != lastBlock) && instBlockName != "") {
+            inst_iterator inInstIt = inst_begin(func);
+            inst_iterator inInstEnd = inst_end(func);
+            for (inInstIt, inInstEnd; inInstIt != inInstEnd; ++inInstIt) {
+                Instruction* innerInst = &*inInstIt;
+                BasicBlock* innerInstBlock = innerInst->getParent();
+
+                // if (innerInst->getOpcode() == Instruction::PHI) continue;
+
+                if (innerInstBlock == instBlock) inInnerBlock = true;
+                if (!inInnerBlock) continue;
+
+                bra = dyn_cast<BranchInst>(innerInst);
+                if (bra) {
+                    uint braSuccsNum = bra->getNumSuccessors();
+                    if (
+                        bra->getSuccessor(0)->getName() == instBlockName ||
+                        (braSuccsNum > 1 && bra->getSuccessor(1)->getName() == instBlockName)
+                    ) {
+                        isLoop = true;
+                        break;
+                    }
+                }
+            }
+        }
+            
+        if (isLoop) {
+            if(std::find(visitedBlocks->begin(), visitedBlocks->end(), instBlock) == visitedBlocks->end())
+                FixValueUse(instBlock, visitedBlocks);
+            while (&*(instIt++) != bra);
+            inst = &*instIt;
+            inst->print(outs());
+            outs() << "\n";
+            instBlock = inst->getParent();
+        }
+
+        uint opIndex = 0;
+        if (inst->getOpcode() == Instruction::PHI) continue;
+        for (auto operand : inst->operand_values()) {
+            for (auto &phi : bb->phis()) {
+                // phi.print(outs());
+                // outs() << "\n";
+                uint phiIndex = 0;
+                for (auto &incVal : phi.incoming_values()) {
+                    if (phi.getIncomingValue(phiIndex) == operand) {
+                        inst->setOperand(opIndex, &phi);
+                    }
+                    phiIndex++;
+                }
+            }
+            opIndex++;
+        }
+
+        lastBlock = instBlock;
+    }
+}
 
 std::string ConvertToZ3Syntax(Value* value, bool isBitwiseOp) {
     SmallString<64> smResult;
@@ -994,8 +1096,130 @@ int main() {
         }
 
         // remove the instructions
-        for (Instruction* inst : instsToRemove)
+        for (Instruction* inst : instsToRemove) {
             inst->eraseFromParent();
+            inst = nullptr;
+        }
+
+        // // Fix use of phi nodes
+        // instIt = inst_begin(func);
+        // endIt = inst_end(func);
+        // for (instIt, endIt; instIt != endIt; ++instIt) {
+        //     Instruction* inst = &*instIt;
+        //     BasicBlock* instBlock = inst->getParent();
+        //     std::string instBlockName = instBlock->getName().str();
+
+        //     if (inst->getOpcode() == Instruction::PHI) {
+        //         if (instBlock->getName() == func.getName())
+        //             continue;
+        //     }
+
+        //     bool isLoop = false;
+        //     bool inInnerBlock = false;
+        //     llvm::BranchInst* bra = nullptr;
+        //     if (instBlockName != "") {
+        //         inst_iterator inInstIt = inst_begin(func);
+        //         inst_iterator inInstEnd = inst_end(func);
+        //         for (inInstIt, inInstEnd; inInstIt != inInstEnd; ++inInstIt) {
+        //             Instruction* innerInst = &*inInstIt;
+        //             BasicBlock* innerInstBlock = innerInst->getParent();
+
+        //             if (innerInstBlock == instBlock) inInnerBlock = true;
+        //             if (!inInnerBlock) continue;
+
+        //             bra = dyn_cast<BranchInst>(innerInst);
+        //             if (bra) {
+        //                 uint braSuccsNum = bra->getNumSuccessors();
+        //                 if (
+        //                     bra->getSuccessor(0)->getName() == instBlockName ||
+        //                     (braSuccsNum > 1 && bra->getSuccessor(1)->getName() == instBlockName)
+        //                 ) {
+        //                     isLoop = true;
+        //                     break;
+        //                 }
+        //             }
+        //         }
+        //     }
+
+        //     std::vector<BasicBlock*> visitedBlocks;
+        //     if (isLoop) {
+        //         bra->print(outs());
+        //         FixValueUse(instBlock, &visitedBlocks);
+        //         while (&*(instIt++) != bra);
+        //     }
+        // }
+            
+
+        // Remove unused instructions
+        instsToRemove.clear();
+        std::vector<Instruction*> instructions;
+        instIt = inst_begin(func);
+        inst_iterator instEnd = inst_end(func);
+        for (instIt, instEnd;  instIt != instEnd; ++instIt) {
+            instructions.push_back(&*instIt);
+        }
+        
+        unique(instructions.begin(), instructions.end());
+        std::reverse(instructions.begin(), instructions.end());
+        uint unusedInstNum = 0;
+        do {
+            unusedInstNum = 0;
+            instsToRemove.clear();
+            for (Instruction* inst : instructions) {
+                if (
+                    inst->getNumUses() == 0                         &&
+                    inst->getType()->getTypeID() != Type::VoidTyID  &&
+                    !inst->isTerminator()
+                ) {
+                    instsToRemove.push_back(inst);
+                    unusedInstNum++;
+                }
+            }
+            // remove the instructions
+            for (Instruction* inst : instsToRemove) {
+                inst->eraseFromParent();
+                inst = nullptr;
+            }
+            instructions.clear();
+            instIt = inst_begin(func);
+            instEnd = inst_end(func);
+            for (instIt, instEnd;  instIt != instEnd; ++instIt) {
+                instructions.push_back(&*instIt);
+            }
+        } while(unusedInstNum > 0);
+
+        // Remove phi nodes with same incoming values from all incoming blocks
+        bool found = false;
+        do {
+            found = false;
+            std::vector<PHINode*> phisToRemove;
+            for (BasicBlock &bb : func) {
+                BasicBlock::phi_iterator phiIter = bb.phis().begin();
+                BasicBlock::phi_iterator phiEnd = bb.phis().end();
+                for (phiIter, phiEnd; phiIter != phiEnd; ++phiIter) {
+                    PHINode* phi = &*phiIter;
+                    std::set<Value*> incomingValues;
+                    uint incomingValuesNum = phi->getNumIncomingValues();
+                    for (uint i = 0; i < incomingValuesNum; ++i)
+                        incomingValues.insert(phi->getIncomingValue(i));
+                    if (incomingValues.size() == 1) {
+                        phisToRemove.push_back(phi);
+                        found = true;
+                    }
+                }
+            }
+
+            for (PHINode* phi : phisToRemove) {
+                // if (phi == phi->getIncomingValue(0)) {
+                //     PtxToLlvmIrConverter::Module->print(outs(), nullptr, false, true);
+                //     phi->print(llvm::outs());
+                //     llvm::outs() << "\n";
+                // }
+                phi->replaceAllUsesWith(phi->getIncomingValue(0));
+                phi->eraseFromParent();
+                phi = nullptr;
+            }
+        } while (found);
     }
 
     // Verification

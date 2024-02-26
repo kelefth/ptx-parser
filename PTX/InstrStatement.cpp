@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <regex>
+#include <set>
 
 // #include "KernelDirectStatement.h"
 
@@ -15,6 +16,7 @@
 
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/CFG.h"
+// #include "llvm/Transforms/Utils/ValueMapper.h"
 
 // std::string InstrStatement::ToString() {
 //     std::string str = "Label: " + getLabel() + " Instruction: " + Inst + " Modifiers: ";
@@ -98,6 +100,10 @@ std::vector<std::string> InstrStatement::getModifiers() const {
     return Modifiers;
 }
 
+std::vector<std::string> InstrStatement::getTypes() const {
+    return Types;
+}
+
 std::vector<std::unique_ptr<Operand>>& InstrStatement::getSourceOps() {
     return SourceOps;
 }
@@ -166,98 +172,315 @@ bool InstrStatement::isBlockInPredecessors(
     return false;
 }
 
-bool isInSuccessors(
+bool isInPredecessors(
     llvm::BasicBlock* block,
     llvm::BasicBlock *blockToFind,
-    std::vector<llvm::BasicBlock*> visitedBlocks
+    std::vector<llvm::BasicBlock*> visitedBlocks = {},
+    std::vector<llvm::BasicBlock*>* visitedPath = nullptr
 ) {
     visitedBlocks.push_back(block);
     if (block == blockToFind) return true;
 
-    for (auto succIt = succ_begin(block), succEnd = succ_end(block); succIt != succEnd; ++succIt) {
-        if (*succIt == block) continue;
-
-        llvm::BasicBlock* successorBlock = *succIt;
-        if(std::find(visitedBlocks.begin(), visitedBlocks.end(), successorBlock) != visitedBlocks.end())
+    for (auto predIt = pred_begin(block), predEnd = pred_end(block); predIt != predEnd; ++predIt) {
+        llvm::BasicBlock* predecessor = *predIt;
+        if(std::find(visitedBlocks.begin(), visitedBlocks.end(), predecessor) != visitedBlocks.end())
             continue;
-        return isInSuccessors(successorBlock, blockToFind, visitedBlocks);
+        if(isInPredecessors(predecessor, blockToFind, visitedBlocks, visitedPath)) {
+            if (visitedPath) visitedPath->push_back(predecessor);
+            return true;
+        }
     }
 
     return false;
 }
 
-llvm::PHINode* InstrStatement::CheckAndGeneratePhiNode(
-    std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt,
-    std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts,
-    llvm::Instruction* lastLlvmInst,
-    llvm::BasicBlock* currBlock,
-    std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd,
-    llvm::PHINode* phi = nullptr
+bool isInSuccessors(
+    llvm::BasicBlock* block,
+    llvm::BasicBlock *blockToFind,
+    std::vector<llvm::BasicBlock*> visitedBlocks,
+    std::vector<llvm::BasicBlock*>* visitedPath
 ) {
-    llvm::Value* llvmStmtValue = llvmStmt.first;
-    llvm::BasicBlock* llvmStmtBlock = llvmStmt.second;
+    visitedBlocks.push_back(block);
+    if (block == blockToFind) return true;
 
-    llvm::pred_iterator pred = llvm::pred_begin(currBlock);
-    llvm::pred_iterator end = llvm::pred_end(currBlock);
-    for (pred; pred != end; ++pred) {
-        std::vector<llvm::BasicBlock*> visitedBlocks;
-        if (isInSuccessors(llvmStmtBlock, *pred, visitedBlocks)) {
-            // Check if an incoming value from the same block already exists,
-            // and if yes the phi node must be inserted into a predecessor
-            bool isPhiInPred = false;
-            for (auto valBlock : *incomingValBlocksToAdd) {
-                if (valBlock.second == *pred) {
-                    phi = CheckAndGeneratePhiNode(
-                        llvmStmt,
-                        llvmStmts,
-                        lastLlvmInst,
-                        *pred,
-                        incomingValBlocksToAdd
-                    );
-                    isPhiInPred = true;
-                }
-            }
+    for (auto succIt = succ_begin(block), succEnd = succ_end(block); succIt != succEnd; ++succIt) {
+        // if (*succIt == block) continue;
 
-            if ((incomingValBlocksToAdd->size() > 0) && !phi) {
-                phi = llvm::PHINode::Create(
-                    lastLlvmInst->getType(),
-                    0,
-                    "",
-                    &*currBlock->getFirstInsertionPt()
-                );
-                // phi->print(llvm::outs());
-                // llvm::outs() << "\n";
-            }
-            if (!isPhiInPred) {
-                incomingValBlocksToAdd->push_back(
-                    std::pair<llvm::Value*, llvm::BasicBlock*>(
-                        llvmStmtValue, *pred
-                    )
-                );
-            }
-            else {
-                incomingValBlocksToAdd->clear();
-                for (std::pair<llvm::Value*, llvm::BasicBlock*> newLlvmStmt : llvmStmts) {
-                    CheckAndGeneratePhiNode(
-                        newLlvmStmt,
-                        llvmStmts,
-                        lastLlvmInst,
-                        *pred,
-                        incomingValBlocksToAdd,
-                        phi
-                    );
-                }
-            }
+        llvm::BasicBlock* successorBlock = *succIt;
+        if(std::find(visitedBlocks.begin(), visitedBlocks.end(), successorBlock) != visitedBlocks.end())
+            continue;
+        if(isInSuccessors(successorBlock, blockToFind, visitedBlocks, visitedPath)) {
+            visitedPath->push_back(successorBlock);
+            return true;
         }
     }
-    return phi;
+
+    return false;
 }
 
-llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
-    std::vector<uint> defStmtIds = GetOperandWriteInstructionIds(ptxOperandName);
+llvm::PHINode* findPhiInPreds(
+    llvm::BasicBlock* block,
+    llvm::Value* valueToFind,
+    std::vector<llvm::BasicBlock*> visitedBlocks = {},
+    std::vector<llvm::BasicBlock*>* visitedPath = nullptr
+) {
+    visitedBlocks.push_back(block);
+    
+    llvm::PHINode* phiInst = nullptr;
+    for (auto &phi : block->phis()) {
+        uint index = 0;
+        for (auto &incVal : phi.incoming_values()) {
+            if (phi.getIncomingValue(index) == valueToFind) {
+                phiInst = &phi;
+                return phiInst;
+            }
+            index++;
+        }
+    }
+
+    for (auto predIt = pred_begin(block), predEnd = pred_end(block); predIt != predEnd; ++predIt) {
+
+        llvm::BasicBlock* predecessor = *predIt;
+        if(std::find(visitedBlocks.begin(), visitedBlocks.end(), predecessor) != visitedBlocks.end())
+            continue;
+
+        phiInst = findPhiInPreds(predecessor, valueToFind, visitedBlocks, visitedPath);
+        if (visitedPath) visitedPath->push_back(predecessor);
+        if (phiInst) break;
+    }
+
+    return phiInst;
+}
+
+// llvm::PHINode* InstrStatement::CheckAndGeneratePhiNode(
+//     std::string opName,
+//     std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt,
+//     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts,
+//     llvm::Instruction* lastLlvmInst,
+//     llvm::BasicBlock* currBlock,
+//     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd,
+//     std::vector<llvm::BasicBlock*> visitedBlocks,
+//     llvm::PHINode* phi = nullptr
+// ) {
+//     visitedBlocks.push_back(currBlock);
+
+//     llvm::Value* llvmStmtValue = llvmStmt.first;
+//     llvm::BasicBlock* llvmStmtBlock = llvmStmt.second;
+
+//     llvm::pred_iterator pred = llvm::pred_begin(currBlock);
+//     llvm::pred_iterator end = llvm::pred_end(currBlock);
+//     for (pred; pred != end; ++pred) {
+//         if(std::find(visitedBlocks.begin(), visitedBlocks.end(), *pred) != visitedBlocks.end())
+//             continue;
+
+//         // bool isPredAfterCurr = false;
+//         // for (llvm::BasicBlock &bb : *currBlock->getParent())  {
+//         //     if (&bb == *pred) break;
+//         //     if (&bb == currBlock) {
+//         //         isPredAfterCurr = true;
+//         //         break;
+//         //     }
+//         // }
+
+//         // if (isPredAfterCurr) continue;
+
+//         std::vector<llvm::BasicBlock*> visitedPreds;
+//         if (isInSuccessors(llvmStmtBlock, *pred, visitedPreds)) {
+//             // Check if an incoming value from the same block already exists,
+//             // and if yes the phi node must be inserted into a predecessor
+//             bool isPhiInPred = false;
+//             llvm::PHINode* predPhi = nullptr;
+//             for (auto valBlock : *incomingValBlocksToAdd) {
+//                 if (valBlock.second == *pred) {
+//                     incomingValBlocksToAdd->clear();
+//                     predPhi = CheckAndGeneratePhiNode(
+//                         opName,
+//                         valBlock,
+//                         llvmStmts,
+//                         lastLlvmInst,
+//                         *pred,
+//                         incomingValBlocksToAdd,
+//                         visitedBlocks
+//                     );
+//                     isPhiInPred = true;
+
+//                     if (predPhi) {
+//                         incomingValBlocksToAdd->push_back(
+//                             std::pair<llvm::Value*, llvm::BasicBlock*>(
+//                                 predPhi, *pred
+//                             )
+//                         );
+//                     }
+//                 }
+//             }
+
+//             if ((incomingValBlocksToAdd->size() > 0) && !phi) {
+//                 phi = llvm::PHINode::Create(
+//                     lastLlvmInst->getType(),
+//                     0,
+//                     "",
+//                     &*currBlock->getFirstInsertionPt()
+//                 );
+//                 // IR comment
+//                 llvm::Constant *Str = llvm::ConstantDataArray::getString(*PtxToLlvmIrConverter::Context, opName);
+//                 llvm::Metadata *MD = llvm::ConstantAsMetadata::get(Str);
+//                 llvm::NamedMDNode *NMD = PtxToLlvmIrConverter::Module->getOrInsertNamedMetadata("comments");
+//                 NMD->addOperand(llvm::MDNode::get(*PtxToLlvmIrConverter::Context, MD));
+//                 phi->setMetadata("comments", NMD->getOperand(NMD->getNumOperands() - 1));
+//                 /////////////////////////////////////////////////////////
+//                 // phi->print(llvm::outs());
+//                 // llvm::outs() << "\n";
+//             }
+//             if (!isPhiInPred) {
+//                 if ((*pred)->getName() == "$L__BB4_22")
+//                     llvm::outs() << "";
+//                 incomingValBlocksToAdd->push_back(
+//                     std::pair<llvm::Value*, llvm::BasicBlock*>(
+//                         llvmStmtValue, *pred
+//                     )
+//                 );
+//             }
+//                 if (phi) {
+//                     uint incValuesNum = phi->getNumIncomingValues();
+//                     for (auto valBlock : *incomingValBlocksToAdd) {
+//                         bool incValueFound = false;
+//                         for (int i = 0; i < incValuesNum; ++i) {
+//                             if (
+//                                 phi->getIncomingValue(i) == valBlock.first &&
+//                                 phi->getIncomingBlock(i) == valBlock.second
+//                             ) {
+//                                 incValueFound = true;
+//                                 break;
+//                             }
+                                
+//                         }
+//                         if (!incValueFound)
+//                             phi->addIncoming(valBlock.first, valBlock.second);
+//                             if (valBlock.second->getName() == "$L__BB4_22")
+//                                 PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+//                     }
+//                 }
+
+//             // }
+//             // else {
+//             //     incomingValBlocksToAdd->clear();
+//             //     for (std::pair<llvm::Value*, llvm::BasicBlock*> newLlvmStmt : llvmStmts) {
+//             //         phi = CheckAndGeneratePhiNode(
+//             //             newLlvmStmt,
+//             //             llvmStmts,
+//             //             lastLlvmInst,
+//             //             *pred,
+//             //             incomingValBlocksToAdd,
+//             //             visitedBlocks,
+//             //             phi
+//             //         );
+//             //     }
+//             // }
+//         }
+//     }
+//     return phi;
+// }
+
+std::vector<llvm::BasicBlock*> findBlockIntersection(std::vector<std::vector<llvm::BasicBlock*>> blocks) {
+    if (blocks.size() == 0) return {};
+
+    std::vector<llvm::BasicBlock*> v_intersection = blocks[0];
+
+    for (auto &b : blocks) {
+        std::sort(b.begin(), b.end());
+    }
+
+    for (size_t i = 1; i < blocks.size(); i++) {
+        std::vector<llvm::BasicBlock*> v_temp;
+        std::set_intersection(v_intersection.begin(), v_intersection.end(), blocks[i].begin(), blocks[i].end(), back_inserter(v_temp));
+        v_intersection = v_temp;
+    }
+
+    return v_intersection;
+}
+
+llvm::PHINode* InstrStatement::CheckAndGeneratePhiNode(
+    std::string opName,
+    std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd
+) {
+
+    llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+    std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> valBlocksToAdd;
+
+    std::vector<std::vector<llvm::BasicBlock*>> visitedPaths;
+    for (auto valBlock : *incomingValBlocksToAdd) {
+        llvm::pred_iterator pred = llvm::pred_begin(currBlock);
+        llvm::pred_iterator end = llvm::pred_end(currBlock);
+        for (pred; pred != end; ++pred) {
+            std::vector<llvm::BasicBlock*> visitedPreds;
+            std::vector<llvm::BasicBlock*> visitedPath;
+            if (isInSuccessors(valBlock.second, *pred, visitedPreds, &visitedPath)) {
+                // Skip values from the same block that not defined in the loop
+                if ((currBlock == *pred) && (valBlock.second != currBlock))
+                    continue;
+                // Skip duplicates
+                if(std::find(
+                    valBlocksToAdd.begin(),
+                    valBlocksToAdd.end(),
+                    std::pair<llvm::Value*, llvm::BasicBlock*>(valBlock.first, *pred)
+                    ) != valBlocksToAdd.end()
+                ) continue;
+                bool blockExists = false;
+                for (auto valBlock : valBlocksToAdd) {
+                    if (valBlock.second == *pred) {
+                        valBlock.first->print(llvm::outs());
+                        llvm::outs() << "\n";
+                        blockExists = true;
+                        break;
+                    }
+                }
+                if (blockExists) continue;
+                visitedPaths.push_back(visitedPath);
+                // llvm::outs() << opName + " Pred before: \n";
+                // valBlock.first->print(llvm::outs());
+                // (*pred)->print(llvm::outs());
+                valBlocksToAdd.push_back(
+                    std::pair<llvm::Value*, llvm::BasicBlock*>(valBlock.first, *pred)
+                );
+                visitedPath.clear();
+            }
+            visitedPath.clear();
+        }
+    }
+
+    std::vector<llvm::BasicBlock*> commonBlocks = findBlockIntersection(visitedPaths);
+    uint currBlocksOccurs = 0;
+    for (auto &nodes : visitedPaths) {
+        currBlocksOccurs += std::count(nodes.begin(), nodes.end(), currBlock);
+    }
+
+    if (commonBlocks.size() == 0 && currBlocksOccurs < valBlocksToAdd.size()) {
+        llvm::PHINode* phi = llvm::PHINode::Create(
+            valBlocksToAdd[0].first->getType(),
+            0,
+            "",
+            &*currBlock->getFirstInsertionPt()
+        );
+
+        for (auto valBlock : valBlocksToAdd) {
+            phi->addIncoming(valBlock.first, valBlock.second);
+        }
+
+        return phi;
+    }
+
+    return nullptr;
+}
+
+void InstrStatement::GeneratePhiNodes(std::string ptxOperandName, int stStmtId) {
+
+    std::vector<uint> defStmtIds = GetOperandWriteInstructionIds(
+        ptxOperandName,
+        stStmtId
+    );
 
     // if none found, return
-    if (defStmtIds.empty()) return nullptr;
+    if (defStmtIds.empty()) return;
 
     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts;
     for (uint stmtId : defStmtIds) {
@@ -270,153 +493,373 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(std::string ptxOperandName) {
         );
     }
 
-    if (llvmStmts.empty()) {
-        std::shared_ptr<Statement> userStmt = GetStatementById(defStmtIds.back());
-        InstrStatement* userStmtInst = dynamic_cast<InstrStatement*>(
-            userStmt.get()
-        );
-
-        if (!userStmt) return nullptr;
-
-        for (auto &op : userStmtInst->getSourceOps()) {
-            if (op->getType() == OperandType::Register) {
-                std::string opName = std::get<std::string>(op->getValue());
-                llvm::Value* value = GetLlvmRegisterValue(opName);
-                return value;
-            }
-            else if (op->getType() == OperandType::Label) {
-                // Check if the operand is a global variable
-                std::string opName = std::get<std::string>(op->getValue());
-                llvm::GlobalVariable* globVar =
-                    PtxToLlvmIrConverter::Module->getGlobalVariable(opName);
-                return globVar;
-            }
-        }
-    }
-    
-    if (llvmStmts.empty()) return nullptr;
+    if (llvmStmts.empty()) return;
 
     llvm::Value* lastLlvmStmt = llvmStmts.back().first;
     llvm::Instruction* lastLlvmInst = llvm::dyn_cast<llvm::Instruction>(
         lastLlvmStmt
     );
 
-    // get last if in the same block, or create a phi node with the last
-    // of each predecessor block, or find the value from an already created
-    // phi node
     llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+    lastLlvmStmt->print(llvm::outs());
+    llvm::outs() << "\n";
+
     if (lastLlvmInst) {
         llvm::PHINode* phi = nullptr;
         bool blockChanged = false;
-        llvm::BasicBlock* prevBlock = currBlock;
+        // llvm::BasicBlock* prevBlock = lastLlvmStmt->getParent();
         // reverse the vector to get the last generated instruction from each
         // block
         reverse(llvmStmts.begin(), llvmStmts.end());
+        std::pair<llvm::Value*, llvm::BasicBlock*> prevStmt = llvmStmts.back();
         std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> incomingValBlocksToAdd;
+        std::vector<llvm::BasicBlock*> phiVisitPath;
+        std::vector<llvm::BasicBlock*> valueVisitPath;
+        isInPredecessors(currBlock, prevStmt.second, {}, &valueVisitPath);
+        llvm::PHINode* prevPhi = findPhiInPreds(currBlock, prevStmt.first, {}, &phiVisitPath);
+        if (prevPhi && (phiVisitPath.size() < valueVisitPath.size())) {
+            incomingValBlocksToAdd.push_back(
+                std::pair<llvm::Value*, llvm::BasicBlock*>(prevPhi, prevPhi->getParent())
+            );
+        }
+        else {
+            incomingValBlocksToAdd.push_back(
+                std::pair<llvm::Value*, llvm::BasicBlock*>(prevStmt)
+            );
+        }
         for (std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt : llvmStmts) {
             llvm::Value* llvmStmtValue = llvmStmt.first;
             llvm::BasicBlock* llvmStmtBlock = llvmStmt.second;
+            llvm::BasicBlock* prevBlock = prevStmt.second;
             if (prevBlock != llvmStmtBlock) {
-                if (isBlockInPredecessors(llvmStmtBlock, currBlock)) {
-                    // If in direct predecessor
+                phiVisitPath.clear();
+                valueVisitPath.clear();
+                isInPredecessors(currBlock, llvmStmtBlock, {}, &valueVisitPath);
+                llvm::PHINode* phi = findPhiInPreds(currBlock, llvmStmtValue, {}, &phiVisitPath);
+                
+                // bool blockExists = false;
+                // for (auto valBlock : incomingValBlocksToAdd) {
+                //     if (valBlock.second == llvmStmtBlock) {
+                //         blockExists = true;
+                //         break;
+                //     }
+                // }
 
-                    // if already shown in another predecessor create a phi node,
-                    // or add a value to an existing one
-                    if ((incomingValBlocksToAdd.size() > 0) && !phi) {
-                        phi = llvm::PHINode::Create(
-                            lastLlvmInst->getType(),
-                            0,
-                            "",
-                            &*currBlock->getFirstInsertionPt()
+                if (phi && (phiVisitPath.size() < valueVisitPath.size())) {
+                // if (phi) {
+                    // if (!blockExists) {
+                        incomingValBlocksToAdd.push_back(
+                            std::pair<llvm::Value*, llvm::BasicBlock*>(phi, phi->getParent())
                         );
-                    }
-                    incomingValBlocksToAdd.push_back(
-                        std::pair<llvm::Value*, llvm::BasicBlock*>(
-                            llvmStmtValue, llvmStmtBlock
-                        )
-                    );
+                    // }
                 }
                 else {
-                    // If not in direct predecessor
-                    phi = CheckAndGeneratePhiNode(
-                        llvmStmt,
-                        llvmStmts,
-                        lastLlvmInst,
-                        currBlock,
-                        &incomingValBlocksToAdd
-                    );
+                    // if (!blockExists) {
+                        incomingValBlocksToAdd.push_back(
+                            std::pair<llvm::Value*, llvm::BasicBlock*>(llvmStmt)
+                        );
+                        llvmStmt.first->print(llvm::outs());
+                        llvm::outs() << "\n";
+                    // }
                 }
-            }
 
-            prevBlock = llvmStmtBlock;
+                prevStmt = llvmStmt;
+            }
         }
 
-        if (phi) {
-            // Add all the incoming values to the generated phi node
-            for (auto valBlock : incomingValBlocksToAdd) {
-                phi->addIncoming(valBlock.first, valBlock.second);
+        if (incomingValBlocksToAdd.size() > 1) {
+            phi = CheckAndGeneratePhiNode(
+                ptxOperandName,
+                &incomingValBlocksToAdd
+            );
+            if (phi && (phi->getNumIncomingValues() < 2)) {
+                phi->eraseFromParent();
+                phi = nullptr;
             }
-            return phi;
         }
-
-        reverse(llvmStmts.begin(), llvmStmts.end());
     }
-
-    // generate a load and get its value if the last generate instruction is a
-    // store, else get the value of the last generated llvm instruction
-    // that returns a value
-    // std::string lastLlvmStmtName = lastLlvmInst->getOpcodeName();
-    llvm::Value* instValue = nullptr;
-    // if (lastLlvmInst && (lastLlvmInst->getOpcode() == llvm::Instruction::Store)) {
-    //     llvm::Value* firstOperand = lastLlvmInst->getOperand(0);
-    //     llvm::Value* secondOperand = lastLlvmInst->getOperand(1);
-    //     llvm::Type* loadType = firstOperand->getType();
-    //     instValue = PtxToLlvmIrConverter::Builder->CreateLoad(
-    //         loadType,
-    //         secondOperand
-    //     );
-    // }
-    // else {
-        for (auto it = llvmStmts.rbegin(); it != llvmStmts.rend(); ++it) {
-            if ((*it).first->getType()->getTypeID() != llvm::Type::VoidTyID) {
-                instValue = (*it).first;
-                break;
-            }
-        }
-    // }
-
-    return instValue;
 }
 
-llvm::Value* InstrStatement::GetLlvmOperandValue(
-    const std::unique_ptr<Operand>& operand
+llvm::Value* InstrStatement::GetLlvmRegisterValue(
+    std::string ptxOperandName,
+    int stStmtId = -1
 ) {
+    llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+    llvm::Value* value = PtxToLlvmIrConverter::getRegToValueOutMapValue(
+        currBlock, ptxOperandName
+    );
+
+    return value;
+}
+
+// llvm::Value* InstrStatement::GetLlvmRegisterValue(
+//     std::string ptxOperandName,
+//     int stStmtId = -1
+// ) {
+//     if (stStmtId == -1) stStmtId = getId();
+
+//     // llvm::outs() << ptxOperandName << "\n";
+
+//     std::vector<uint> defStmtIds = GetOperandWriteInstructionIds(
+//         ptxOperandName,
+//         stStmtId
+//     );
+
+//     // if none found, return
+//     if (defStmtIds.empty()) return nullptr;
+
+//     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts;
+//     for (uint stmtId : defStmtIds) {
+//         std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> mappedStmts =
+//             PtxToLlvmIrConverter::getPtxToLlvmMapValue(stmtId);
+//         llvmStmts.insert(
+//             llvmStmts.end(),
+//             mappedStmts.begin(),
+//             mappedStmts.end()
+//         );
+//     }
+
+//     if (llvmStmts.empty()) {
+//         std::shared_ptr<Statement> userStmt = GetStatementById(defStmtIds.back());
+//         InstrStatement* userStmtInst = dynamic_cast<InstrStatement*>(
+//             userStmt.get()
+//         );
+
+//         if (!userStmt) return nullptr;
+
+//         for (auto &op : userStmtInst->getSourceOps()) {
+//             if (op->getType() == OperandType::Register) {
+//                 std::string opName = std::get<std::string>(op->getValue());
+//                 llvm::Value* value = GetLlvmRegisterValue(opName);
+//                 return value;
+//             }
+//             else if (op->getType() == OperandType::Label) {
+//                 // Check if the operand is a global variable
+//                 std::string opName = std::get<std::string>(op->getValue());
+//                 llvm::GlobalVariable* globVar =
+//                     PtxToLlvmIrConverter::Module->getGlobalVariable(opName);
+//                 return globVar;
+//             }
+//         }
+//     }
+    
+//     if (llvmStmts.empty()) return nullptr;
+
+//     llvm::Value* lastLlvmStmt = llvmStmts.back().first;
+//     llvm::Instruction* lastLlvmInst = llvm::dyn_cast<llvm::Instruction>(
+//         lastLlvmStmt
+//     );
+
+//     llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+//     lastLlvmStmt->print(llvm::outs());
+//     llvm::outs() << "\n";
+
+//     if (lastLlvmInst) {
+//         llvm::PHINode* phi = nullptr;
+//         // llvm::BasicBlock* prevBlock = lastLlvmStmt->getParent();
+//         // reverse the vector to get the last generated instruction from each
+//         // block
+//         reverse(llvmStmts.begin(), llvmStmts.end());
+//         std::pair<llvm::Value*, llvm::BasicBlock*> prevStmt = llvmStmts.back();
+//         std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> incomingValBlocksToAdd;
+//         for (std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt : llvmStmts) {
+//             llvm::Value* llvmStmtValue = llvmStmt.first;
+//             llvm::BasicBlock* llvmStmtBlock = llvmStmt.second;
+//             llvm::BasicBlock* prevBlock = prevStmt.second;
+//             if (prevBlock != llvmStmtBlock) {
+//                 if (!isInPredecessors(currBlock, llvmStmtBlock)) continue;
+
+//                 // std::vector<llvm::BasicBlock*> phiVisitPath;
+//                 // std::vector<llvm::BasicBlock*> valueVisitPath;
+//                 // isInPredecessors(currBlock, llvmStmtBlock, {}, &valueVisitPath);
+//                 // llvm::PHINode* phi = findPhiInPreds(currBlock, llvmStmtValue, {}, &phiVisitPath);
+//                 if (llvm::PHINode* phi = findPhiInPreds(currBlock, llvmStmtValue)) {
+//                 // if (phi && (phiVisitPath.size() < valueVisitPath.size())) {
+//                     return phi;
+//                 }
+//                 else return llvmStmtValue;
+
+//                 prevStmt = llvmStmt;
+//             }
+//         }
+//         reverse(llvmStmts.begin(), llvmStmts.end());
+//     }
+
+//     llvm::Value* instValue = nullptr;
+//     for (auto it = llvmStmts.rbegin(); it != llvmStmts.rend(); ++it) {
+//         if ((*it).first->getType()->getTypeID() != llvm::Type::VoidTyID) {
+//             instValue = (*it).first;
+//             break;
+//         }
+//     }
+//     return instValue;
+
+
+//     // get last if in the same block, or create a phi node with the last
+//     // of each predecessor block, or find the value from an already created
+//     // phi node
+//     // llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+//     // if (lastLlvmInst) {
+//     //     llvm::PHINode* phi = nullptr;
+//     //     bool blockChanged = false;
+//     //     llvm::BasicBlock* prevBlock = currBlock;
+//     //     // reverse the vector to get the last generated instruction from each
+//     //     // block
+//     //     reverse(llvmStmts.begin(), llvmStmts.end());
+//     //     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> incomingValBlocksToAdd;
+//     //     for (std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt : llvmStmts) {
+//     //         llvm::Value* llvmStmtValue = llvmStmt.first;
+//     //         llvm::BasicBlock* llvmStmtBlock = llvmStmt.second;
+//     //         if (prevBlock != llvmStmtBlock) {
+//     //             if (isBlockInPredecessors(llvmStmtBlock, currBlock)) {
+//     //                 // If in direct predecessor
+
+//     //                 // if already shown in another predecessor create a phi node,
+//     //                 // or add a value to an existing one
+//     //                 if ((incomingValBlocksToAdd.size() > 0) && !phi) {
+//     //                     phi = llvm::PHINode::Create(
+//     //                         lastLlvmInst->getType(),
+//     //                         0,
+//     //                         "",
+//     //                         &*currBlock->getFirstInsertionPt()
+//     //                     );
+//     //                 }
+//     //                 incomingValBlocksToAdd.push_back(
+//     //                     std::pair<llvm::Value*, llvm::BasicBlock*>(
+//     //                         llvmStmtValue, llvmStmtBlock
+//     //                     )
+//     //                 );
+//     //             }
+//     //             else {
+//     //                 // If not in direct predecessor
+//     //                 std::vector<llvm::BasicBlock*> visitedBlocks;
+//     //                 phi = CheckAndGeneratePhiNode(
+//     //                     llvmStmt,
+//     //                     llvmStmts,
+//     //                     lastLlvmInst,
+//     //                     currBlock,
+//     //                     &incomingValBlocksToAdd,
+//     //                     visitedBlocks,
+//     //                     phi
+//     //                 );
+//     //             }
+//     //         }
+
+//     //         prevBlock = llvmStmtBlock;
+//     //     }
+
+//     //     if (phi) {
+//     //         // Add all the incoming values to the generated phi node
+//     //         uint incValuesNum = phi->getNumIncomingValues();
+//     //         for (auto valBlock : incomingValBlocksToAdd) {
+//     //             bool incValueFound = false;
+//     //             // If the value for the same block already exists, don't add
+//     //             // it again
+//     //             for (int i = 0; i < incValuesNum; ++i) {
+//     //                 if (
+//     //                     phi->getIncomingValue(i) == valBlock.first &&
+//     //                     phi->getIncomingBlock(i) == valBlock.second
+//     //                 ) {
+//     //                     incValueFound = true;
+//     //                     break;
+//     //                 }
+//     //             }
+//     //             if (!incValueFound)
+//     //                 phi->addIncoming(valBlock.first, valBlock.second);
+//     //         }
+
+//     //         uint blockPredNum = llvm::pred_size(currBlock);
+//     //         if ((blockPredNum < 2) || (phi->getNumIncomingValues() < blockPredNum)) {
+//     //             phi->eraseFromParent();
+//     //             return nullptr;
+//     //         }
+
+//     //         // std::vector<llvm::BasicBlock*> incBlocks;
+//     //         // for (int i = 0; i < incValuesNum; ++i) {
+//     //         //     llvm::Value* incValue = phi->getIncomingValue(i);
+//     //         //     llvm::BasicBlock* incBlock = phi->getIncomingBlock(i);
+
+//     //         //     if (
+//     //         //         std::find(incBlocks.begin(), incBlocks.end(), incBlock) != incBlocks.end()
+//     //         //     ) {
+                    
+//     //         //     }
+
+//     //         //     incBlocks.push_back(incBlock);
+//     //         // }
+//     //         // phi->print(llvm::outs());
+//     //         // llvm::outs() << "\n";
+//     //         // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+//     //         return phi;
+//     //     }
+
+//     //     reverse(llvmStmts.begin(), llvmStmts.end());
+//     // }
+
+//     // generate a load and get its value if the last generate instruction is a
+//     // store, else get the value of the last generated llvm instruction
+//     // that returns a value
+//     // std::string lastLlvmStmtName = lastLlvmInst->getOpcodeName();
+//     // llvm::Value* instValue = nullptr;
+//     // // if (lastLlvmInst && (lastLlvmInst->getOpcode() == llvm::Instruction::Store)) {
+//     // //     llvm::Value* firstOperand = lastLlvmInst->getOperand(0);
+//     // //     llvm::Value* secondOperand = lastLlvmInst->getOperand(1);
+//     // //     llvm::Type* loadType = firstOperand->getType();
+//     // //     instValue = PtxToLlvmIrConverter::Builder->CreateLoad(
+//     // //         loadType,
+//     // //         secondOperand
+//     // //     );
+//     // // }
+//     // // else {
+//     //     for (auto it = llvmStmts.rbegin(); it != llvmStmts.rend(); ++it) {
+//     //         if ((*it).first->getType()->getTypeID() != llvm::Type::VoidTyID) {
+//     //             instValue = (*it).first;
+//     //             break;
+//     //         }
+//     //     }
+//     // // }
+
+//     // return instValue;
+// }
+
+llvm::Value* InstrStatement::GetLlvmOperandValue(
+    const std::unique_ptr<Operand>& operand,
+    std::string ptxType = "",
+    int stStmtId = -1
+) {
+    if (stStmtId == -1) stStmtId = getId();
+
     auto operandValue = operand->getValue();
     OperandType operandType = operand->getType();
 
     llvm::Value* operandLlvmValue = nullptr;
     if (operandType == OperandType::Register) {
         std::string regName = std::get<std::string>(operandValue);
-        operandLlvmValue = GetLlvmRegisterValue(regName);
+        operandLlvmValue = GetLlvmRegisterValue(regName, stStmtId);
     }
     else if (operandType == OperandType::Immediate) {
+        if (ptxType == "") ptxType = Types[0];
         double value = std::get<double>(operandValue);
-        operandLlvmValue = GetLlvmImmediateValue(value);
+        operandLlvmValue = GetLlvmImmediateValue(value, ptxType);
     }
 
     return operandLlvmValue;
 }
 
-llvm::Constant* InstrStatement::GetLlvmImmediateValue(double value) {
+llvm::Constant* InstrStatement::GetLlvmImmediateValue(
+    double value,
+    std::string ptxType
+) {
     bool isSigned = false;
 
-    char typePrefix = Types[0][0];
+    char typePrefix = ptxType[0];
     // if signed
     if (typePrefix == 's')
         isSigned = true;
 
     llvm::Type* type = PtxToLlvmIrConverter::GetTypeMapping(
-        Types[0]
+        ptxType
     )(*PtxToLlvmIrConverter::Context);
 
     if (type->isFloatingPointTy())
@@ -434,9 +877,17 @@ DirectStatement* InstrStatement::GetVar(std::string name) {
         if (stmt->getId() > currKernel->getId()) break;
         LinkingDirectStatement* linkingDir =
             dynamic_cast<LinkingDirectStatement*>(stmt.get());
+        VarDecDirectStatement* varDecDir =
+            dynamic_cast<VarDecDirectStatement*>(stmt.get());
         if (linkingDir != nullptr) {
             if (linkingDir->getIdentifier() == name) {
                 varStmt = linkingDir;
+                break;
+            }
+        }
+        else if (varDecDir != nullptr) {
+            if (varDecDir->getIdentifier() == name) {
+                varStmt = varDecDir;
                 break;
             }
         }
@@ -498,8 +949,11 @@ std::vector<uint> InstrStatement::GetOperandWriteInstructionIds(
 }
 
 std::vector<uint> InstrStatement::GetOperandWriteInstructionIds(
-    std::string operandName
+    std::string operandName,
+    int stStmtId = -1
 ) {
+    if (stStmtId == -1) stStmtId = getId();
+
     std::unique_ptr currKernel = GetCurrentKernel();
     std::vector<std::shared_ptr<Statement>> currKernelStatements =
         currKernel->getBodyStatements();
@@ -508,7 +962,7 @@ std::vector<uint> InstrStatement::GetOperandWriteInstructionIds(
 
     for (const auto stmt : currKernelStatements) {
         unsigned int stmtId = stmt->getId();
-        if (stmtId >= this->getId()) break;
+        if (stmtId >= stStmtId) break;
         InstrStatement* instrStatement =
             dynamic_cast<InstrStatement*>(stmt.get());
         if (instrStatement == nullptr)
@@ -571,6 +1025,96 @@ llvm::PHINode* InstrStatement::CreatePhiInBlockStart(
     return phi;
 }
 
+void changeRegTypePtrToInt(std::string regName) {
+    llvm::Type* intType = llvm::Type::getInt64Ty(
+        *PtxToLlvmIrConverter::Context
+    );
+
+    std::set<llvm::Instruction*> instsToDelete;
+
+    // Update in and out maps
+    auto inMaps = PtxToLlvmIrConverter::getRegToValueInMaps();
+    for (const auto inMap : inMaps) {
+        llvm::Value* inValue =
+            PtxToLlvmIrConverter::getRegToValueInMapValue(inMap.first, regName);
+        if (!inValue) continue;
+
+        llvm::Instruction* regInst =
+            llvm::dyn_cast<llvm::Instruction>(inValue);
+        assert(regInst);
+
+        llvm::Instruction* newSourceOpInst = regInst->clone();
+        newSourceOpInst->mutateType(intType);
+        newSourceOpInst->insertBefore(regInst);
+
+        // update already generated phi nodes
+        if (regInst->getOpcode() == llvm::Instruction::PHI) {
+            llvm::PHINode* phi = llvm::cast<llvm::PHINode>(regInst);
+            uint incomingValuesNum = phi->getNumIncomingValues();
+            for (uint i = 0; i < incomingValuesNum; ++i) {
+                llvm::Value* incVal = phi->getIncomingValue(i);
+                llvm::BasicBlock* incBlock = phi->getIncomingBlock(i);
+
+                llvm::Value* newVal =
+                    PtxToLlvmIrConverter::getRegToValueOutMapValue(incBlock, regName);
+                phi->setIncomingValueForBlock(incBlock, newVal);
+            }
+        }
+
+        inValue->replaceAllUsesWith(newSourceOpInst);
+        
+        PtxToLlvmIrConverter::setRegToValueInMapValue(
+            inMap.first, regName, newSourceOpInst
+        );
+
+        instsToDelete.insert(regInst);
+    }
+
+    auto outMaps = PtxToLlvmIrConverter::getRegToValueOutMaps();
+    for (const auto outMap : outMaps) {
+        llvm::Value* outValue =
+            PtxToLlvmIrConverter::getRegToValueOutMapValue(outMap.first, regName);
+        if (!outValue) continue;
+
+        llvm::Instruction* regInst =
+            llvm::dyn_cast<llvm::Instruction>(outValue);
+        assert(regInst);
+
+        llvm::Instruction* newSourceOpInst = regInst->clone();
+        newSourceOpInst->mutateType(intType);
+        newSourceOpInst->insertBefore(regInst);
+
+        // update already generated phi node incoming values
+        if (newSourceOpInst->getOpcode() == llvm::Instruction::PHI) {
+            llvm::PHINode* phi = llvm::cast<llvm::PHINode>(newSourceOpInst);
+            uint incomingValuesNum = phi->getNumIncomingValues();
+            for (uint i = 0; i < incomingValuesNum; ++i) {
+                llvm::Value* incVal = phi->getIncomingValue(i);
+                llvm::BasicBlock* incBlock = phi->getIncomingBlock(i);
+
+                llvm::Value* newVal =
+                    PtxToLlvmIrConverter::getRegToValueInMapValue(outMap.first, regName);
+                phi->setIncomingValueForBlock(incBlock, newVal);
+            }
+        }
+
+        outValue->replaceAllUsesWith(newSourceOpInst);
+        
+        PtxToLlvmIrConverter::setRegToValueOutMapValue(
+            outMap.first, regName, newSourceOpInst
+        );
+
+        instsToDelete.insert(regInst);
+    }
+
+    for (llvm::Instruction* val : instsToDelete) {
+        if (val) {
+            val->eraseFromParent();
+            val = nullptr;
+        }
+    }
+}
+
 void InstrStatement::ToLlvmIr() {
     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> genLlvmInstructions;
 
@@ -582,16 +1126,25 @@ void InstrStatement::ToLlvmIr() {
         llvm::Type* firstOpType = firstSourceOperand->getType();
         llvm::Type* secOpType = secSourceOperand->getType();
 
-        llvm::Type* intType = llvm::Type::getInt64Ty(
-            *PtxToLlvmIrConverter::Context
-        );
+        // llvm::BasicBlock* currBlock =
+        //     PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
         if (firstOpType->getTypeID() == llvm::Type::PointerTyID) {
-            firstSourceOperand->mutateType(intType);
+            // firstSourceOperand->mutateType(intType);
+            std::string firstOpName = std::get<std::string>(
+                SourceOps[0]->getValue()
+            );
+
+            changeRegTypePtrToInt(firstOpName);
         }
 
         if (secOpType->getTypeID() == llvm::Type::PointerTyID) {
-            secSourceOperand->mutateType(intType);
+            // secSourceOperand->mutateType(intType);
+            std::string secOpName = std::get<std::string>(
+                SourceOps[1]->getValue()
+            );
+
+            changeRegTypePtrToInt(secOpName);
         }
     }
 
@@ -691,19 +1244,33 @@ void InstrStatement::ToLlvmIr() {
             }
         }
 
+        // Update operands with phi nodes in the current block, where needed
+        // for (llvm::Instruction &inst : *currBlock) {
+        //     if (inst.getOpcode() == llvm::Instruction::PHI)
+        //         continue;
+        //     uint index = 0;
+        //     for (auto operand : inst.operand_values()) {
+        //         if (llvm::PHINode* phi = findPhiInPreds(currBlock, operand)) {
+        //             inst.setOperand(index, phi);
+        //         }
+        //         index++;
+        //     }
+        // }
+
+        llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        llvm::BasicBlock* prevBlock  = currBlock;
+
         // Update the instruction insertion point
         PtxToLlvmIrConverter::Builder->SetInsertPoint(newInsertBlock);
 
-        // Iterate through blocks, delete empty blocks and add terminators if missing
-        llvm::BasicBlock* insertBlock =
-            PtxToLlvmIrConverter::Builder->GetInsertBlock();
-        std::vector<llvm::BasicBlock*> blocksToRemove;
+        currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-        PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+        // Iterate through blocks, delete empty blocks and add terminators if missing
+        std::vector<llvm::BasicBlock*> blocksToRemove;
 
         for (auto bbIt = currFunction->begin(); bbIt != currFunction->end(); ++bbIt) {
             llvm::BasicBlock &bb = *bbIt;
-            if (bb.getTerminator() || (&bb == insertBlock))
+            if (bb.getTerminator() || (&bb == currBlock))
                 continue;
 
             auto bbItNext = std::next(bbIt);
@@ -726,8 +1293,29 @@ void InstrStatement::ToLlvmIr() {
             }
         }
 
+        PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(currBlock);
+
+        // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+        // for (const auto stmt : currKernel->getBodyStatements()) {
+        //     if (stmt->getId() >= getId()) break;
+        //     InstrStatement* instStmt =
+        //         dynamic_cast<InstrStatement*>(stmt.get());
+        //     if (!instStmt) continue;
+        //     if (instStmt->getDestOps().size() > 0) {
+        //         if (instStmt->getDestOps()[0]->getType() == OperandType::Register) {
+        //             std::string destOpName = std::get<std::string>(
+        //                 instStmt->getDestOps()[0]->getValue()
+        //             );
+        //             GeneratePhiNodes(destOpName, instStmt->getId() + 1);
+        //         }
+        //     }
+        // }
+
         // for (llvm::BasicBlock* block : blocksToRemove)
         //     block->eraseFromParent();
+
+        // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+
     }
 
     if (Inst == "ld") {
@@ -975,15 +1563,12 @@ void InstrStatement::ToLlvmIr() {
         }
     }
     else if (Inst == "cvta") {
-        // std::string regName = std::get<std::string>(SourceOps[0]->getValue());
-        // llvm::Value* op = GetLlvmRegisterValue(regName);
-
-        // llvm::Value* load = PtxToLlvmIrConverter::Builder->CreateLoad(
-        //     op->getType(),
-        //     op
-        // );
-
-        // genLlvmInstructions.push_back(load);
+        llvm::Value* sourceOpValue = GetLlvmOperandValue(SourceOps[0]);
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(sourceOpValue, currBlock)
+        );
     }
     else if (Inst == "cvt") {
         llvm::Value* sourceValue = GetLlvmOperandValue(SourceOps[0]);
@@ -1078,40 +1663,40 @@ void InstrStatement::ToLlvmIr() {
             }
             else {
                 // if bit type convert to address
+                llvm::Value* opValue = GetLlvmOperandValue(SourceOps[0]);
                 if (Types.front()[0] == 'b') {
-                    llvm::Value* opValue = GetLlvmOperandValue(SourceOps[0]);
                     opValue->mutateType(
                         llvm::PointerType::get(*PtxToLlvmIrConverter::Context, 0)
                     );
+
                 }
+                
+                genLlvmInstructions.push_back(
+                    std::pair<llvm::Value*, llvm::BasicBlock*>(opValue, currBlock)
+                );
             }
         }
         else if (firstOpType == OperandType::Immediate) {
-            // initialization instruction, create an add with zero instead
-            double secondOp = std::get<double>(SourceOps[0]->getValue());
+            // initialization instruction, store const in generated instructions
+            double opValue = std::get<double>(SourceOps[0]->getValue());
 
             llvm::Value* firstOpValue = GetLlvmOperandValue(SourceOps[0]);
             llvm::Type* firstOpValueType = firstOpValue->getType();
-            llvm::Constant* zeroValue;
+            llvm::Constant* constValue;
 
             if (firstOpValueType->isIntegerTy()) {
-                zeroValue = llvm::ConstantInt::get(
-                    firstOpValueType, 0, false
+                constValue = llvm::ConstantInt::get(
+                    firstOpValueType, opValue, false
                 );
             }
             else {
-                zeroValue = llvm::ConstantFP::get(
-                    firstOpValueType, 0
+                constValue = llvm::ConstantFP::get(
+                    firstOpValueType, opValue
                 );
             }
 
-            llvm::Value* add = PtxToLlvmIrConverter::Builder->CreateAdd(
-                zeroValue,
-                firstOpValue
-            );
-
             genLlvmInstructions.push_back(
-                std::pair<llvm::Value*, llvm::BasicBlock*>(add, currBlock)
+                std::pair<llvm::Value*, llvm::BasicBlock*>(constValue, currBlock)
             );
         }
     }
@@ -1237,31 +1822,31 @@ void InstrStatement::ToLlvmIr() {
         bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
                            secondOperandValue->getType()->isFloatingPointTy();
 
-        if ((destName == firstSourceOpName) && !firstOperandInst) {
-            llvm::BasicBlock* currBasicBlock
-                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        // if ((destName == firstSourceOpName) && !firstOperandInst) {
+        //     llvm::BasicBlock* currBasicBlock
+        //         = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-            llvm::PHINode* phi = CreatePhiInBlockStart(
-                firstOperandValue,
-                currBasicBlock
-            );
+        //     llvm::PHINode* phi = CreatePhiInBlockStart(
+        //         firstOperandValue,
+        //         currBasicBlock
+        //     );
 
-            if (isFloatInst) {
-                add = PtxToLlvmIrConverter::Builder->CreateFAdd(
-                    phi,
-                    secondOperandValue
-                );
-            }
-            else {
-                add = PtxToLlvmIrConverter::Builder->CreateAdd(
-                    phi,
-                    secondOperandValue
-                );
-            }
+        //     if (isFloatInst) {
+        //         add = PtxToLlvmIrConverter::Builder->CreateFAdd(
+        //             phi,
+        //             secondOperandValue
+        //         );
+        //     }
+        //     else {
+        //         add = PtxToLlvmIrConverter::Builder->CreateAdd(
+        //             phi,
+        //             secondOperandValue
+        //         );
+        //     }
 
-            phi->addIncoming(add, currBasicBlock);
-        }
-        else {
+        //     // phi->addIncoming(add, currBasicBlock);
+        // }
+        // else {
             if (isFloatInst) {
                 add = PtxToLlvmIrConverter::Builder->CreateFAdd(
                     firstOperandValue,
@@ -1274,7 +1859,7 @@ void InstrStatement::ToLlvmIr() {
                     secondOperandValue
                 );
             }
-        }
+        // }
 
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(add, currBlock)
@@ -1491,31 +2076,31 @@ void InstrStatement::ToLlvmIr() {
         bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
                            secondOperandValue->getType()->isFloatingPointTy();
         
-        if ((destName == firstSourceOpName) && !firstOperandInst) {
-            llvm::BasicBlock* currBasicBlock
-                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        // if ((destName == firstSourceOpName) && !firstOperandInst) {
+        //     llvm::BasicBlock* currBasicBlock
+        //         = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-            llvm::PHINode* phi = CreatePhiInBlockStart(
-                firstOperandValue,
-                currBasicBlock
-            );
+        //     llvm::PHINode* phi = CreatePhiInBlockStart(
+        //         firstOperandValue,
+        //         currBasicBlock
+        //     );
 
-            if (isFloatInst) {
-                sub = PtxToLlvmIrConverter::Builder->CreateFSub(
-                    phi,
-                    secondOperandValue
-                );
-            }
-            else {
-                sub = PtxToLlvmIrConverter::Builder->CreateSub(
-                    phi,
-                    secondOperandValue
-                );
-            }
+        //     if (isFloatInst) {
+        //         sub = PtxToLlvmIrConverter::Builder->CreateFSub(
+        //             phi,
+        //             secondOperandValue
+        //         );
+        //     }
+        //     else {
+        //         sub = PtxToLlvmIrConverter::Builder->CreateSub(
+        //             phi,
+        //             secondOperandValue
+        //         );
+        //     }
 
-            phi->addIncoming(sub, currBasicBlock);
-        }
-        else {
+        //     // phi->addIncoming(sub, currBasicBlock);
+        // }
+        // else {
             if (isFloatInst) {
                 sub = PtxToLlvmIrConverter::Builder->CreateFSub(
                     firstOperandValue,
@@ -1528,7 +2113,7 @@ void InstrStatement::ToLlvmIr() {
                     secondOperandValue
                 );
             }
-        }
+        // }
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1556,31 +2141,31 @@ void InstrStatement::ToLlvmIr() {
         bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
                            secondOperandValue->getType()->isFloatingPointTy();
 
-        if ((destName == firstSourceOpName) && !firstOperandInst) {
-            llvm::BasicBlock* currBasicBlock
-                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        // if ((destName == firstSourceOpName) && !firstOperandInst) {
+        //     llvm::BasicBlock* currBasicBlock
+        //         = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-            llvm::PHINode* phi = CreatePhiInBlockStart(
-                firstOperandValue,
-                currBasicBlock
-            );
+        //     llvm::PHINode* phi = CreatePhiInBlockStart(
+        //         firstOperandValue,
+        //         currBasicBlock
+        //     );
 
-            if (isFloatInst) {
-                mul = PtxToLlvmIrConverter::Builder->CreateFMul(
-                    phi,
-                    secondOperandValue
-                );
-            }
-            else {
-                mul = PtxToLlvmIrConverter::Builder->CreateMul(
-                    phi,
-                    secondOperandValue
-                );
-            }
+        //     if (isFloatInst) {
+        //         mul = PtxToLlvmIrConverter::Builder->CreateFMul(
+        //             phi,
+        //             secondOperandValue
+        //         );
+        //     }
+        //     else {
+        //         mul = PtxToLlvmIrConverter::Builder->CreateMul(
+        //             phi,
+        //             secondOperandValue
+        //         );
+        //     }
 
-            phi->addIncoming(mul, currBasicBlock);
-        }
-        else {
+        //     // phi->addIncoming(mul, currBasicBlock);
+        // }
+        // else {
             if (isFloatInst) {
                 mul = PtxToLlvmIrConverter::Builder->CreateFMul(
                     firstOperandValue,
@@ -1593,7 +2178,7 @@ void InstrStatement::ToLlvmIr() {
                     secondOperandValue
                 );
             }
-        }
+        // }
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1623,39 +2208,39 @@ void InstrStatement::ToLlvmIr() {
         bool isFloatInst = firstOperandValue->getType()->isFloatingPointTy() ||
                            secondOperandValue->getType()->isFloatingPointTy();
 
-        if ((destName == firstSourceOpName) && !firstOperandInst) {
-            llvm::BasicBlock* currBasicBlock
-                = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        // if ((destName == firstSourceOpName) && !firstOperandInst) {
+        //     llvm::BasicBlock* currBasicBlock
+        //         = PtxToLlvmIrConverter::Builder->GetInsertBlock();
 
-            llvm::PHINode* phi = CreatePhiInBlockStart(
-                firstOperandValue,
-                currBasicBlock
-            );
+        //     llvm::PHINode* phi = CreatePhiInBlockStart(
+        //         firstOperandValue,
+        //         currBasicBlock
+        //     );
 
-            if (isFloatInst) {
-                div = PtxToLlvmIrConverter::Builder->CreateFDiv(
-                    phi,
-                    secondOperandValue
-                );
-            }
-            else {    
-                if (isSigned) {    
-                    div = PtxToLlvmIrConverter::Builder->CreateSDiv(
-                        phi,
-                        secondOperandValue
-                    );
-                }
-                else {
-                    div = PtxToLlvmIrConverter::Builder->CreateUDiv(
-                        phi,
-                        secondOperandValue
-                    );
-                }
-            }
+        //     if (isFloatInst) {
+        //         div = PtxToLlvmIrConverter::Builder->CreateFDiv(
+        //             phi,
+        //             secondOperandValue
+        //         );
+        //     }
+        //     else {    
+        //         if (isSigned) {    
+        //             div = PtxToLlvmIrConverter::Builder->CreateSDiv(
+        //                 phi,
+        //                 secondOperandValue
+        //             );
+        //         }
+        //         else {
+        //             div = PtxToLlvmIrConverter::Builder->CreateUDiv(
+        //                 phi,
+        //                 secondOperandValue
+        //             );
+        //         }
+        //     }
 
-            phi->addIncoming(div, currBasicBlock);
-        }
-        else {
+        //     // phi->addIncoming(div, currBasicBlock);
+        // }
+        // else {
             if (isFloatInst) {
                 div = PtxToLlvmIrConverter::Builder->CreateFDiv(
                     firstOperandValue,
@@ -1676,7 +2261,7 @@ void InstrStatement::ToLlvmIr() {
                     );
                 }
             }
-        }
+        // }
 
         llvm::BasicBlock* currBlock =
             PtxToLlvmIrConverter::Builder->GetInsertBlock();
@@ -1940,10 +2525,13 @@ void InstrStatement::ToLlvmIr() {
 
         // check if label exists before the current instruction
         bool labelExistsBeforeInst = false;
+        int firstLoopInstId = -1;
         for (const auto stmt : currKernel->getBodyStatements()) {
             if (stmt->getId() >= getId()) break;
-            if (targetValue == stmt->getLabel())
+            if (targetValue == stmt->getLabel()) {
                 labelExistsBeforeInst = true;
+                firstLoopInstId = stmt->getId();
+            }
         }
 
         // if it exists, find the basic block that was created,
@@ -1997,13 +2585,20 @@ void InstrStatement::ToLlvmIr() {
                 trueBlock,
                 falseBlock
             );
+
+            // Update operands in the current block, after generating phi nodes
+            llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            llvm::BasicBlock* prevBlock = currBlock;
+            PtxToLlvmIrConverter::Builder->SetInsertPoint(falseBlock);
+            currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+
+            PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(currBlock);
         }
         else br = PtxToLlvmIrConverter::Builder->CreateBr(trueBlock);
 
         br->print(llvm::outs());
         llvm::outs() << "\n";
-
-        PtxToLlvmIrConverter::Builder->SetInsertPoint(falseBlock);
 
         genLlvmInstructions.push_back(
             std::pair<llvm::Value*, llvm::BasicBlock*>(br, currBasicBlock)
@@ -2011,186 +2606,678 @@ void InstrStatement::ToLlvmIr() {
 
         // If in loop, iterate through loop statements again and apply fixes
         if (labelExistsBeforeInst) {
-            bool inCurrBlock = false;
-            bool skipBlock = false;
-            int innerLoopTermId = -1;
-            uint iterCount = 0;
-            for (const auto stmt : currKernel->getBodyStatements()) {
-                uint stmtId = stmt->getId();
-                if (stmtId >= this->getId()) break;
+            if (trueBlock) {
+                // reverse block's previous out map
+                auto prevInMap = PtxToLlvmIrConverter::getRegToValueInMap(trueBlock);
+                auto prevOutMap = PtxToLlvmIrConverter::getRegToValueOutMap(trueBlock);
 
-                if (stmt->getLabel() == targetValue)
-                    inCurrBlock = true;
-                // find current block
-                if (!inCurrBlock) continue;
-
-                if (stmt->getId() > innerLoopTermId) {
-                    innerLoopTermId = -1;
-                    skipBlock = false;
+                // Use multimap, cause there is one instance for each constant
+                std::multimap<llvm::Value*, std::string> revPrevInMap;
+                std::multimap<llvm::Value*, std::string> revPrevOutMap;
+                for (auto& mapPair : prevInMap) {
+                    revPrevInMap.insert(
+                        std::pair<llvm::Value*, std::string>(
+                            mapPair.second, mapPair.first
+                        )
+                    );
                 }
 
-                // Skip nested loops
-                if (!skipBlock && iterCount > 0) {
-                    for (const auto loopStmt : currKernel->getBodyStatements()) {
-                        if (loopStmt->getId() < stmt->getId()) continue;
-                        InstrStatement* instStmt =
-                            dynamic_cast<InstrStatement*>(loopStmt.get());
-                        if (!instStmt) continue;
-                        if (instStmt->getInst() == "bra") {
-                            std::string braSourceOp = std::get<std::string>(
-                                instStmt->getDestOps()[0]->getValue()
-                            );
-                            if (stmt->getLabel() == braSourceOp) {
-                                skipBlock = true;
-                                innerLoopTermId = instStmt->getId();
-                            }
-                        }
-                    }
+                for (auto& mapPair : prevOutMap) {
+                    revPrevOutMap.insert(
+                        std::pair<llvm::Value*, std::string>(
+                            mapPair.second, mapPair.first
+                        )
+                    );
                 }
 
-                if (skipBlock) continue;
+                PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(trueBlock);
 
-                // skip if not an instruction or has no source operands
-                InstrStatement* instStmt =
-                    dynamic_cast<InstrStatement*>(stmt.get());
-                if (!instStmt || (instStmt->getSourceOps().size() == 0))
-                    continue;
+                // Remove keys from the map that did not exist before
+                // These are values that came up from the loop back
+                auto newInMap = PtxToLlvmIrConverter::getRegToValueInMap(trueBlock);
+                std::set<std::string> keysToRemove;
+                for (const auto& mapEntry : newInMap) {
+                    std::string key = mapEntry.first;
+                    if (prevInMap.count(key) == 0 || !prevInMap[key])
+                        keysToRemove.insert(key);
+                }
 
-                auto sourceOp = instStmt->getSourceOps()[0]->getValue();
-                std::string* firstSourceOpName =
-                    std::get_if<std::string>(&sourceOp);
+                // prevInMap["%r79"]->print(llvm::outs());
+                // llvm::outs() << "\n";
+                // newInMap["%r79"]->print(llvm::outs());
+                // llvm::outs() << "\n";
 
-                auto destOp = instStmt->getDestOps()[0]->getValue();
-                std::string* destName =
-                    std::get_if<std::string>(&destOp);
+                for (const std::string key : keysToRemove)
+                    newInMap.erase(key);
 
-                // skip if first or destination operand is not a register
-                if (!firstSourceOpName || !destName) continue;
+                PtxToLlvmIrConverter::setRegToValueInMap(trueBlock, newInMap);
+                // auto newOutMap = PtxToLlvmIrConverter::getRegToValueInMap(trueBlock);
+                // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
                 
-                if (*destName == *firstSourceOpName) {
+
+                // Update operands in the loop with the new generated out map values
+                // Update inner blocks in and out maps and phi node values
+                bool inCurrBlock = false;
+                bool skipBlock = false;
+                int innerLoopTermId = -1;
+                llvm::BasicBlock* lastVisitedBlock = trueBlock;
+                for (const auto stmt : currKernel->getBodyStatements()) {
+                    uint stmtId = stmt->getId();
+
+                    // find current block
+                    if (stmt->getLabel() == targetValue)
+                        inCurrBlock = true;
+                    if (!inCurrBlock) continue;
+
+                    // if (stmt->getId() > innerLoopTermId) {
+                    //     innerLoopTermId = -1;
+                    //     skipBlock = false;
+                    // }
+
+                    if (stmtId >= this->getId()) {
+                        break;
+                    }
 
                     auto llvmValues =
                         PtxToLlvmIrConverter::getPtxToLlvmMapValue(stmtId);
                     if (llvmValues.size() == 0) continue;
-                    std::pair<llvm::Value*, llvm::BasicBlock*> llvmValue =
-                        llvmValues[0];
-                    // llvmValue.first->print(llvm::outs());
-                    llvm::Instruction* llvmInst =
-                        llvm::dyn_cast<llvm::Instruction>(llvmValue.first);
+                        
+                    llvm::Value* stmtValue = llvmValues.front().first;
+                    llvm::BasicBlock* stmtBlock = llvmValues.front().second;
+                    std::string stmtBlockName = stmtBlock->getName().str();
 
-                    if (!llvmInst) continue;
 
-                    // Find loop block
-                    llvm::BasicBlock* loopBlock = nullptr;
-                    for (llvm::BasicBlock &bb : *kernelFunc) {
-                        std::string bbName = bb.getName().str();
-                        if (bbName == "") continue;
-                        if (bbName == targetValue)
-                            loopBlock = &bb;
+                    // // Skip nested loops
+                    // if ((stmtBlock != trueBlock) && (stmtBlock != lastVisitedBlock) && stmtBlockName != "") {
+                    //     for (const auto loopStmt : currKernel->getBodyStatements()) {
+                    //         if (loopStmt->getId() < stmt->getId()) continue;
+                    //         InstrStatement* instStmt =
+                    //             dynamic_cast<InstrStatement*>(loopStmt.get());
+                    //         if (!instStmt) continue;
+                    //         if (instStmt->getInst() == "bra") {
+                    //             std::string braSourceOp = std::get<std::string>(
+                    //                 instStmt->getDestOps()[0]->getValue()
+                    //             );
+                    //             if (stmt->getLabel() == braSourceOp) {
+                    //                 skipBlock = true;
+                    //                 innerLoopTermId = instStmt->getId();
+                    //             }
+                    //         }
+                    //     }
+                    // }
+
+                    // if (skipBlock) continue;
+
+                    llvm::Instruction* inst =
+                        llvm::dyn_cast<llvm::Instruction>(stmtValue);
+
+                    InstrStatement* instStmt =
+                        dynamic_cast<InstrStatement*>(stmt.get());
+
+                    if (!instStmt) {
+                        lastVisitedBlock = stmtBlock;
+                        continue;
                     }
 
-                    // Avoid adding duplicate phi nodes
-                    bool phiExists = false;
-                    for (llvm::PHINode &phiNode : loopBlock->phis()) {
-                        if (phiNode.getBasicBlockIndex(loopBlock) >= 0)
-                            phiExists = phiNode.getIncomingValueForBlock(loopBlock) == llvmInst;
+                    if (instStmt->getDestOps().size() == 0) {
+                        lastVisitedBlock = stmtBlock;
+                        continue;
                     }
 
-                    if (phiExists) continue;
+                    // Check block change, update the in and out maps
+                    // of the next block and regenerate phi nodes
+                    if (stmtBlock != lastVisitedBlock) {
+                        // PtxToLlvmIrConverter::setRegToValueOutMap(lastVisitedBlock, newOutMap);
 
-                    assert(loopBlock);
+                        // reverse block's previous maps
+                        prevInMap = PtxToLlvmIrConverter::getRegToValueInMap(stmtBlock);
+                        prevOutMap = PtxToLlvmIrConverter::getRegToValueOutMap(stmtBlock);
+                        // newOutMap = ;
+                        // Use multimap, cause there is one instance for each constant
+                        revPrevInMap.clear();
+                        for (auto& mapPair : prevInMap) {
+                            revPrevInMap.insert(
+                                std::pair<llvm::Value*, std::string>(
+                                    mapPair.second, mapPair.first
+                                )
+                            );
+                        }
+                        revPrevOutMap.clear();
+                        for (auto& mapPair : prevOutMap) {
+                            revPrevOutMap.insert(
+                                std::pair<llvm::Value*, std::string>(
+                                    mapPair.second, mapPair.first
+                                )
+                            );
+                        }
 
-                    llvm::PHINode* phi = CreatePhiInBlockStart(
-                        llvmInst->getOperand(0),
-                        loopBlock
-                    );
+                        // uint phiIndex = 0;
+                        // for (llvm::PHINode& phi : stmtBlock->phis()) {
+                        //     auto regNames = revPrevInMap.equal_range(&phi);
+                        //     std::string regName = regNames.first->second;
 
-                    // update first operand with phi node and add this value
-                    // as incoming in the phi node (loop)
-                    phi->addIncoming(llvmInst, currBasicBlock);
-                    // update all occurences of this register in this loop
-                    // with the phi node
-                    bool innerInCurrBlock = false;
-                    for (const auto innerStmt : currKernel->getBodyStatements()) {
-                        uint innerStmtId = innerStmt->getId();
-                        if (innerStmtId > stmtId) break;
+                        //     uint incValNum = phi.getNumIncomingValues();
+                        //     for (uint i = 0; i < incValNum; ++i) {
+                        //         llvm::BasicBlock* block = phi.getIncomingBlock(i);
+                        //         llvm::Value* value = phi.getIncomingValue(i);
+                        //         llvm::Value* newValue =
+                        //             PtxToLlvmIrConverter::getRegToValueOutMapValue(block, regName);
+                        //         newOutMap[regName] = newValue;
+                        //         llvm::outs() << "Phi: ";
+                        //         phi.print(llvm::outs());
+                        //         llvm::outs() << "\nValue: ";
+                        //         value->print(llvm::outs());
+                        //         llvm::outs() << "\nNew Value: ";
+                        //         newValue->print(llvm::outs());
+                        //         llvm::outs() << "\n";
+                        //         phi.setIncomingValue(i, newValue);
+                        //     }
+                        //     phiIndex++;
+                        // }
 
-                        if (innerStmt->getLabel() == targetValue)
-                            innerInCurrBlock = true;
-                        // find current block
-                        if (!innerInCurrBlock) continue;
+                        std::map<std::string, llvm::Value*> prevPhis;
+                        std::map<std::string, llvm::Value*> inMap =
+                            PtxToLlvmIrConverter::getRegToValueInMap(stmtBlock);
 
-                        InstrStatement* innerInstStmt =
-                            dynamic_cast<InstrStatement*>(innerStmt.get());
+                        for (auto mapIt = inMap.begin(); mapIt != inMap.end(); ++mapIt) {
+                            if (mapIt->second) {
+                                llvm::PHINode* pairPhi =
+                                    llvm::dyn_cast<llvm::PHINode>(mapIt->second);
+                                if (pairPhi) prevPhis.insert(*mapIt);
+                            }
+                        }
 
-                        if (!innerInstStmt) continue;
+                        PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(stmtBlock);
 
-                        auto innerLlvmValues =
-                            PtxToLlvmIrConverter::getPtxToLlvmMapValue(innerStmtId);
-                        if (innerLlvmValues.size() == 0) continue;
-                        std::pair<llvm::Value*, llvm::BasicBlock*> innerllvmValue =
-                            innerLlvmValues[0];
+                        // Remove keys from the map that did not exist before
+                        // These are values that came up from the loop back
+                        auto newInMap = PtxToLlvmIrConverter::getRegToValueInMap(stmtBlock);
+                        std::set<std::string> keysToRemove;
+                        for (const auto& mapEntry : newInMap) {
+                            std::string key = mapEntry.first;
+                            if (inMap.count(key) == 0 || !inMap[key])
+                                keysToRemove.insert(key);
+                        }
 
-                        llvm::Instruction* innerLlvmInst =
-                            llvm::dyn_cast<llvm::Instruction>(innerllvmValue.first);
+                        for (const std::string key : keysToRemove)
+                            newInMap.erase(key);
 
-                        if (!innerLlvmInst) continue;
+                        PtxToLlvmIrConverter::setRegToValueInMap(stmtBlock, newInMap);
 
-                        // Check all source operands for the register
-                        // and update the value with the phi node if found
-                        for (const auto &sourceOp : innerInstStmt->getSourceOps()) {
-                            auto sourceOpValue = sourceOp->getValue();
-                            std::string* sourceOpName =
-                                std::get_if<std::string>(&sourceOpValue);
+                        std::set<llvm::PHINode*> phisToDelete;
+                        for (auto mapIt = prevPhis.begin(); mapIt != prevPhis.end(); ++mapIt) {
+                            std::string regName = mapIt->first;
+                            llvm::PHINode* prevPhi = 
+                                llvm::cast<llvm::PHINode>(mapIt->second);
+                            llvm::Value* newValue =
+                                PtxToLlvmIrConverter::getRegToValueInMapValue(
+                                    stmtBlock, regName
+                                );
+                            llvm::PHINode* newPhi =
+                                llvm::dyn_cast<llvm::PHINode>(newValue);
+                            prevPhi->print(llvm::outs());
+                            llvm::outs() << "\n";
+                            newValue->print(llvm::outs());
+                            llvm::outs() << "\n";
+                            // if (prevPhi == newPhi) continue;
 
-                            if (!sourceOpName) {
-                                AddressExpr* addrExpr =
-                                    std::get_if<AddressExpr>(&sourceOpValue);
-                                if (addrExpr) {
-                                    auto addrExprOpValue =
-                                        addrExpr->getFirstOperand()->getValue();
-                                    sourceOpName = std::get_if<std::string>(
-                                        &addrExprOpValue
-                                    );
+                            if (newPhi) {
+                                uint prevPhiIncValuesNum = prevPhi->getNumIncomingValues();
+                                uint newPhiIncValuesNum = newPhi->getNumIncomingValues();
+                                for (uint i = 0; i < newPhiIncValuesNum; ++i) {
+                                    llvm::Value* newIncVal = newPhi->getIncomingValue(i);
+                                    llvm::BasicBlock* incBlock = newPhi->getIncomingBlock(i);
+                                    if (incBlock == stmtBlock)
+                                        newPhi->setIncomingValue(i, prevPhi->getIncomingValue(i));
+                                    else
+                                        newPhi->setIncomingValue(i, newIncVal);
                                 }
+                                // PtxToLlvmIrConverter::setRegToValueInMapValue(
+                                //     stmtBlock, regName, prevPhi
+                                // );
+                                // phisToDelete.insert(newPhi);
                             }
                             
-                            if (sourceOpName && *sourceOpName == *destName) {
-                                innerLlvmInst->setOperand(0, phi);
-                            }
+                            if (prevPhi != newPhi)
+                                prevPhi->replaceAllUsesWith(newPhi);
+
+                            // // Replace the values in all maps too
+                            // for (auto& bb : *kernelFunc) {
+                            //     llvm::Value* regOutValue =
+                            //         PtxToLlvmIrConverter::getRegToValueOutMapValue(&bb, regName);
+                            //     if (regOutValue == prevPhi)
+                            //         PtxToLlvmIrConverter::setRegToValueOutMapValue(&bb, regName, newPhi);
+
+                            //     llvm::Value* regInValue =
+                            //         PtxToLlvmIrConverter::getRegToValueInMapValue(&bb, regName);
+                            //     if (regInValue == prevPhi)
+                            //         PtxToLlvmIrConverter::setRegToValueInMapValue(&bb, regName, newPhi);
+                            // }
+                            // PtxToLlvmIrConverter::setRegToValueOutMapValue(
+                            //     stmtBlock, regName, newPhi
+                            // );
+                            // phisToDelete.insert(prevPhi);
                         }
-
-                        // Check destination register, in case that this is
-                        // a store instruction that uses the register
-                        if (innerInstStmt->getDestOps().size() > 0) {
-                            auto destOpValue =
-                                innerInstStmt->getDestOps()[0]->getValue();
-                            AddressExpr* addrExpr =
-                                std::get_if<AddressExpr>(&destOpValue);
-                            if (!addrExpr) continue;
-
-                            auto addrExprOpValue =
-                                addrExpr->getFirstOperand()->getValue();
-                            std::string* destOpName = std::get_if<std::string>(
-                                &addrExprOpValue
-                            );
-
-                            if (destOpName && *destOpName == *destName) {
-                                uint opcode = innerLlvmInst->getOpcode();
-                                // case that there is and addition in the
-                                // accessed address
-                                if (opcode == llvm::Instruction::Add)
-                                    innerLlvmInst->setOperand(0, phi);
-                                else if (opcode == llvm::Instruction::Store)
-                                    innerLlvmInst->setOperand(1, phi);
-                            }
+                        for (auto phi : phisToDelete) {
+                            phi->eraseFromParent();
+                            phi = nullptr;
                         }
-
-                        // llvmInst->setOperand(0, phi);
                     }
+
+                    std::string destRegName = "";
+                    if (instStmt->getDestOps()[0]->getType() == OperandType::Register)
+                        destRegName = std::get<std::string>(instStmt->getDestOps()[0]->getValue());
+                    // else if (instStmt->getDestOps()[0]->getType() == OperandType::Address) {
+                    //     auto destOpAddr = std::get<AddressExpr>(instStmt->getDestOps()[0]->getValue());
+                    //     auto addrFirstOp = destOpAddr.getFirstOperand();
+                    //     auto addrSecOp = destOpAddr.getSecondOperand();
+                    //     if (addrFirstOp->getType() == OperandType::Register)
+                    //         destRegName = std::get<std::string>(addrFirstOp->getValue());
+                    //     else if (addrSecOp->getType() == OperandType::Register)
+                    //         destRegName = std::get<std::string>(addrSecOp->getValue());
+                    // }
+                    else {
+                        lastVisitedBlock = stmtBlock;
+                        continue;
+                    }
+
+                    if (!inst) {
+                        if (
+                            llvm::isa<llvm::ConstantInt>(stmtValue) ||
+                            llvm::isa<llvm::ConstantFP>(stmtValue)
+                        )
+                        PtxToLlvmIrConverter::setRegToValueOutMapValue(
+                            stmtBlock, destRegName, stmtValue
+                        );
+
+                        lastVisitedBlock = stmtBlock;
+                        continue;
+                    }
+
+                    for (auto llvmValuePair : llvmValues) {
+                        llvm::Value* llvmValue = llvmValuePair.first;
+                        if (llvm::dyn_cast<llvm::PHINode>(llvmValue)) {
+                            // newOutMap[destRegName] = llvmValue;
+                            PtxToLlvmIrConverter::setRegToValueOutMapValue(
+                                stmtBlock, destRegName, llvmValue
+                            );
+                            continue;
+                        }
+                        llvm::Instruction* llvmInst =
+                            llvm::dyn_cast<llvm::Instruction>(llvmValue);
+                        if (!llvmInst) continue;
+                        uint opIndex = 0;
+                        for (auto operand : llvmInst->operand_values()) {
+                            auto regNames = revPrevInMap.equal_range(operand);
+                            std::string regName = "";
+                            for (auto regNameIt = regNames.first; regNameIt != regNames.second; ++regNameIt) {
+                                // Check if value in map corresponds to a register
+                                // in the PTX instruction
+                                uint sourceOpsNum = instStmt->getSourceOps().size();
+                                for (uint i = 0; i < sourceOpsNum; ++i) {
+                                    std::string sourceOpName = "";
+                                    if (instStmt->getSourceOps()[i]->getType() == OperandType::Register)
+                                        sourceOpName = std::get<std::string>(instStmt->getSourceOps()[i]->getValue());
+                                    else if (instStmt->getSourceOps()[i]->getType() == OperandType::Address) {
+                                        auto sourceOpAddr = std::get<AddressExpr>(instStmt->getSourceOps()[i]->getValue());
+                                        auto addrFirstOp = sourceOpAddr.getFirstOperand();
+                                        auto addrSecOp = sourceOpAddr.getSecondOperand();
+                                        if (addrFirstOp->getType() == OperandType::Register)
+                                            sourceOpName = std::get<std::string>(addrFirstOp->getValue());
+                                        else if (addrSecOp && addrSecOp->getType() == OperandType::Register)
+                                            sourceOpName = std::get<std::string>(addrSecOp->getValue());
+                                    }
+
+                                    if (sourceOpName == regNameIt->second) {
+                                        regName = regNameIt->second;
+                                        break;
+                                    }
+                                    if (regName != "") break;
+                                }
+                            }
+                            // std::string regName = revPrevInMap[operand];
+                            if (regName != "") {
+                                llvm::Value* newValue = nullptr;
+                                llvm::Value* newInValue =
+                                    PtxToLlvmIrConverter::getRegToValueInMapValue(
+                                        stmtBlock, regName
+                                    );
+                                // If there is phi for this register in the new
+                                // IN state, get the phi node
+                                llvm::Instruction* newInInst = nullptr;
+                                if (newInValue)
+                                    newInInst = llvm::dyn_cast<llvm::Instruction>(newInValue);
+                                if (
+                                    newInInst &&
+                                    (newInInst->getOpcode() == llvm::Instruction::PHI)
+                                ) {
+                                    newValue = newInValue;
+                                }
+                                else  {
+                                    // newValue = newOutMap[regName];
+                                    newValue = PtxToLlvmIrConverter::getRegToValueOutMapValue(
+                                        stmtBlock, regName
+                                    );
+                                }
+
+                                // if (llvm::PHINode* instPhi = llvm::dyn_cast<llvm::PHINode>(llvmInst)) {
+                                //     if (instPhi->getIncomingValue(0) == newValue) {
+                                //         instPhi->print(llvm::outs());
+                                //         llvm::outs() << "\n";
+                                //     }
+                                // }
+                                // if (newValue == llvmInst) {
+                                //     // PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
+                                //     llvm::outs() << "Value same as incoming: ";
+                                //     llvmInst->print(llvm::outs());
+                                //     llvm::outs() << "\n";
+                                // }
+                                llvmInst->setOperand(opIndex, newValue);
+                            }
+                            opIndex++;
+                        }
+                        // llvmInst->print(llvm::outs());
+                        // llvm::outs() << "\n";
+                        // newOutMap[destRegName] = llvmValue;
+                        PtxToLlvmIrConverter::setRegToValueOutMapValue(
+                            stmtBlock, destRegName, llvmValue
+                        );
+                    }
+
+                    lastVisitedBlock = stmtBlock;
                 }
-                iterCount++;
+                PtxToLlvmIrConverter::Module->print(llvm::outs(), nullptr, false, true);
             }
+            if (falseBlock) PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(falseBlock);
+                
+            //     std::string currKernelName = currKernel->getName();
+            //     llvm::Function* currFunction =
+            //         PtxToLlvmIrConverter::Module->getFunction(currKernelName);
+            //     bool inLoop = false;
+            //     bool skipBlock = false;
+            //     llvm::BranchInst* innerloopBra = nullptr;
+            //     llvm::BasicBlock* lastBlock = trueBlock;
+            //     llvm::inst_iterator instIt = inst_begin(currFunction);
+            //     llvm::inst_iterator instEnd = inst_end(currFunction);
+            //     // std::map<llvm::Value*, std::string> revOutMap;
+            //     for (instIt, instEnd; instIt != instEnd; ++instIt) {
+            //         llvm::Instruction* inst = &*instIt;
+            //         llvm::BasicBlock* instBlock = inst->getParent();
+            //         std::string instBlockName = instBlock->getName().str();
+            //         if (instBlock == trueBlock) inLoop = true;
+            //         if (!inLoop) {
+            //             lastBlock = instBlock;
+            //             continue;
+            //         }
+                        
+            //         if (inst == br) break;                    
+
+            //         if (inst->getOpcode() == llvm::Instruction::PHI)
+            //             continue;
+
+            //         if (inst == innerloopBra) skipBlock = false;
+
+            //         // if (lastBlock != trueBlock) {
+            //         //     // reverse block's out map
+            //         //     auto outMap = PtxToLlvmIrConverter::getRegToValueOutMap(instBlock);
+            //         //     for (auto& mapPair : outMap) {
+            //         //         revOutMap.insert(
+            //         //             std::pair<llvm::Value*, std::string>(
+            //         //                 mapPair.second, mapPair.first
+            //         //             )
+            //         //         );
+            //         //     }
+            //         // }
+
+            //         // Check if there is an inner loop
+            //         bool inInnerBlock = false;
+            //         llvm::inst_iterator inInstIt = inst_begin(currFunction);
+            //         llvm::inst_iterator inInstEnd = inst_end(currFunction);
+            //         if ((instBlock != trueBlock) && (instBlock != lastBlock) && instBlockName != "") {
+            //             for (inInstIt, inInstEnd; inInstIt != inInstEnd; ++inInstIt) {
+            //                 llvm::Instruction* innerInst = &*inInstIt;
+            //                 llvm::BasicBlock* innerInstBlock =
+            //                     innerInst->getParent();
+            //                 if (innerInstBlock == instBlock) inInnerBlock = true;
+            //                 if (!inInnerBlock) continue;
+
+            //                 llvm::BranchInst* bra =
+            //                     llvm::dyn_cast<llvm::BranchInst>(innerInst);
+            //                 if (bra) {
+            //                     uint braSuccsNum = bra->getNumSuccessors();
+            //                     if (
+            //                         bra->getSuccessor(0) == instBlock ||
+            //                         (braSuccsNum > 1 && bra->getSuccessor(1) == instBlock)
+            //                     ) {
+            //                         skipBlock = true;
+            //                         innerloopBra = bra;
+            //                     }
+            //                 }
+            //             }
+            //         }
+
+            //         if (skipBlock) {
+            //             lastBlock = instBlock;
+            //             continue;
+            //         }                        
+
+            //         uint opIndex = 0;
+            //         for (auto operand : inst->operand_values()) {
+            //             std::string regName = revPrevOutMap[operand];
+            //             auto opInst = llvm::dyn_cast<llvm::Instruction>(operand);
+            //             llvm::Value* newValue =
+            //                 PtxToLlvmIrConverter::getRegToValueOutMapValue(instBlock, regName);
+            //             if (newValue) {
+            //                 inst->setOperand(opIndex, newValue);
+            //                 // newValue->print(llvm::outs());
+            //             }
+            //             opIndex++;
+            //         }
+            //         lastBlock = instBlock;
+            //     }
+            // }
+
+            // bool inCurrBlock = false;
+            // bool skipBlock = false;
+            // int innerLoopTermId = -1;
+            // uint iterCount = 0;
+            // for (const auto stmt : currKernel->getBodyStatements()) {
+            //     uint stmtId = stmt->getId();
+            //     if (stmtId >= this->getId()) break;
+
+            //     if (stmt->getLabel() == targetValue)
+            //         inCurrBlock = true;
+            //     // find current block
+            //     if (!inCurrBlock) continue;
+
+            //     if (stmt->getId() > innerLoopTermId) {
+            //         innerLoopTermId = -1;
+            //         skipBlock = false;
+            //     }
+
+            //     // Skip nested loops
+            //     if (!skipBlock && iterCount > 0) {
+            //         for (const auto loopStmt : currKernel->getBodyStatements()) {
+            //             if (loopStmt->getId() < stmt->getId()) continue;
+            //             InstrStatement* instStmt =
+            //                 dynamic_cast<InstrStatement*>(loopStmt.get());
+            //             if (!instStmt) continue;
+            //             if (instStmt->getInst() == "bra") {
+            //                 std::string braSourceOp = std::get<std::string>(
+            //                     instStmt->getDestOps()[0]->getValue()
+            //                 );
+            //                 if (stmt->getLabel() == braSourceOp) {
+            //                     skipBlock = true;
+            //                     innerLoopTermId = instStmt->getId();
+            //                 }
+            //             }
+            //         }
+            //     }
+
+            //     if (skipBlock) continue;
+
+            //     // skip if not an instruction or has no source operands
+            //     InstrStatement* instStmt =
+            //         dynamic_cast<InstrStatement*>(stmt.get());
+            //     if (!instStmt || (instStmt->getSourceOps().size() == 0))
+            //         continue;
+
+            //     auto sourceOp = instStmt->getSourceOps()[0]->getValue();
+            //     std::string* firstSourceOpName =
+            //         std::get_if<std::string>(&sourceOp);
+
+            //     auto destOp = instStmt->getDestOps()[0]->getValue();
+            //     std::string* destName =
+            //         std::get_if<std::string>(&destOp);
+
+            //     // skip if first or destination operand is not a register
+            //     if (!firstSourceOpName || !destName) continue;
+                
+            //     // if (*destName == *firstSourceOpName) {
+
+            //     //     auto llvmValues =
+            //     //         PtxToLlvmIrConverter::getPtxToLlvmMapValue(stmtId);
+            //     //     if (llvmValues.size() == 0) continue;
+            //     //     std::pair<llvm::Value*, llvm::BasicBlock*> llvmValue =
+            //     //         llvmValues[0];
+            //     //     // llvmValue.first->print(llvm::outs());
+            //     //     llvm::Instruction* llvmInst =
+            //     //         llvm::dyn_cast<llvm::Instruction>(llvmValue.first);
+
+            //     //     if (!llvmInst) continue;
+
+            //     //     // Find loop block
+            //     //     llvm::BasicBlock* loopBlock = nullptr;
+            //     //     for (llvm::BasicBlock &bb : *kernelFunc) {
+            //     //         std::string bbName = bb.getName().str();
+            //     //         if (bbName == "") continue;
+            //     //         if (bbName == targetValue)
+            //     //             loopBlock = &bb;
+            //     //     }
+
+            //     //     // Avoid adding duplicate phi nodes
+            //     //     bool phiExists = false;
+            //     //     for (llvm::PHINode &phiNode : loopBlock->phis()) {
+            //     //         if (phiNode.getBasicBlockIndex(loopBlock) >= 0)
+            //     //             phiExists = phiNode.getIncomingValueForBlock(loopBlock) == llvmInst;
+            //     //     }
+
+            //     //     if (phiExists) continue;
+
+            //     //     assert(loopBlock);
+
+            //     //     // Find def of first operand outside the loop,
+            //     //     // if doesn't exist don't create phi
+            //     //     llvm::Value* firstSourceOpValue = GetLlvmOperandValue(
+            //     //         instStmt->getSourceOps()[0],
+            //     //         firstLoopInstId
+            //     //     );
+            //     //     llvm::PHINode* phi = CreatePhiInBlockStart(
+            //     //         firstSourceOpValue,
+            //     //         loopBlock
+            //     //     );
+
+            //     //     // TODO
+            //     //     // if (currBasicBlock->hasNPredecessorsOrMore(2)) {
+            //     //     //     for (llvm::PHINode &phiNode : currBasicBlock->phis()) {
+            //     //     //         if (phiNode.getBasicBlockIndex(currBasicBlock) >= 0)
+            //     //     //             phiExists = phiNode.getIncomingValueForBlock(currBasicBlock) == llvmInst;
+            //     //     //     }
+            //     //     // }
+            //     //     // else {
+            //     //         // update first operand with phi node and add this value
+            //     //         // as incoming in the phi node (loop)
+            //     //         phi->addIncoming(llvmInst, currBasicBlock);
+            //     //     // }
+
+            //     //     llvm::outs() << "Inst: ";
+            //     //     llvmInst->print(llvm::outs());
+            //     //     llvm::outs() << "\nOperand: ";
+            //     //     llvmInst->getOperand(0)->print(llvm::outs());
+            //     //     llvm::outs() << "\n";
+            //     //     phi->print(llvm::outs());
+            //     //     llvm::outs() << "\n";
+            //     //     // update all occurences of this register in this loop
+            //     //     // with the phi node
+            //     //     bool innerInCurrBlock = false;
+            //     //     for (const auto innerStmt : currKernel->getBodyStatements()) {
+            //     //         uint innerStmtId = innerStmt->getId();
+            //     //         if (innerStmtId > stmtId) break;
+
+            //     //         if (innerStmt->getLabel() == targetValue)
+            //     //             innerInCurrBlock = true;
+            //     //         // find current block
+            //     //         if (!innerInCurrBlock) continue;
+
+            //     //         InstrStatement* innerInstStmt =
+            //     //             dynamic_cast<InstrStatement*>(innerStmt.get());
+
+            //     //         if (!innerInstStmt) continue;
+
+            //     //         auto innerLlvmValues =
+            //     //             PtxToLlvmIrConverter::getPtxToLlvmMapValue(innerStmtId);
+            //     //         if (innerLlvmValues.size() == 0) continue;
+            //     //         std::pair<llvm::Value*, llvm::BasicBlock*> innerllvmValue =
+            //     //             innerLlvmValues[0];
+
+            //     //         llvm::Instruction* innerLlvmInst =
+            //     //             llvm::dyn_cast<llvm::Instruction>(innerllvmValue.first);
+
+            //     //         if (!innerLlvmInst) continue;
+
+            //     //         // Check all source operands for the register
+            //     //         // and update the value with the phi node if found
+            //     //         for (const auto &sourceOp : innerInstStmt->getSourceOps()) {
+            //     //             auto sourceOpValue = sourceOp->getValue();
+            //     //             std::string* sourceOpName =
+            //     //                 std::get_if<std::string>(&sourceOpValue);
+
+            //     //             if (!sourceOpName) {
+            //     //                 AddressExpr* addrExpr =
+            //     //                     std::get_if<AddressExpr>(&sourceOpValue);
+            //     //                 if (addrExpr) {
+            //     //                     auto addrExprOpValue =
+            //     //                         addrExpr->getFirstOperand()->getValue();
+            //     //                     sourceOpName = std::get_if<std::string>(
+            //     //                         &addrExprOpValue
+            //     //                     );
+            //     //                 }
+            //     //             }
+                            
+            //     //             if (sourceOpName && *sourceOpName == *destName) {
+            //     //                 innerLlvmInst->setOperand(0, phi);
+            //     //             }
+            //     //         }
+
+            //     //         // Check destination register, in case that this is
+            //     //         // a store instruction that uses the register
+            //     //         if (innerInstStmt->getDestOps().size() > 0) {
+            //     //             auto destOpValue =
+            //     //                 innerInstStmt->getDestOps()[0]->getValue();
+            //     //             AddressExpr* addrExpr =
+            //     //                 std::get_if<AddressExpr>(&destOpValue);
+            //     //             if (!addrExpr) continue;
+
+            //     //             auto addrExprOpValue =
+            //     //                 addrExpr->getFirstOperand()->getValue();
+            //     //             std::string* destOpName = std::get_if<std::string>(
+            //     //                 &addrExprOpValue
+            //     //             );
+
+            //     //             if (destOpName && *destOpName == *destName) {
+            //     //                 uint opcode = innerLlvmInst->getOpcode();
+            //     //                 // case that there is and addition in the
+            //     //                 // accessed address
+            //     //                 if (opcode == llvm::Instruction::Add)
+            //     //                     innerLlvmInst->setOperand(0, phi);
+            //     //                 else if (opcode == llvm::Instruction::Store)
+            //     //                     innerLlvmInst->setOperand(1, phi);
+            //     //             }
+            //     //         }
+
+            //     //         // llvmInst->setOperand(0, phi);
+            //     //     }
+                // iterCount++;
         }
     }
     else if (Inst == "ret") {
@@ -2455,6 +3542,23 @@ void InstrStatement::ToLlvmIr() {
     }
 
     PtxToLlvmIrConverter::setPtxToLlvmMapValue(getId(), genLlvmInstructions);
+    
+    if (Inst != "bra") {
+        llvm::BasicBlock* currBlock = PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        if (
+            DestOps.size() > 0                             && 
+            DestOps[0]->getType() == OperandType::Register &&
+            genLlvmInstructions.size() > 0
+        ) {
+            std::string destOpName = std::get<std::string>(
+                DestOps[0]->getValue()
+            );
+
+            PtxToLlvmIrConverter::setRegToValueOutMapValue(
+                currBlock, destOpName, genLlvmInstructions.back().first
+            );
+        }
+    }
 
     // for (auto stmt : statements) {
 

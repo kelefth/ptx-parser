@@ -33,24 +33,39 @@ class InstrStatement : public Statement {
         llvm::BasicBlock* haystack
     );
 
+    // llvm::PHINode* CheckAndGeneratePhiNode(
+    //     std::string opName,
+    //     std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt,
+    //     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts,
+    //     llvm::Instruction* lastLlvmInst,
+    //     llvm::BasicBlock* currBlock,
+    //     std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd,
+    //     std::vector<llvm::BasicBlock*> visitedBlocks,
+    //     llvm::PHINode* phi
+    // );
     llvm::PHINode* CheckAndGeneratePhiNode(
-        std::pair<llvm::Value*, llvm::BasicBlock*> llvmStmt,
-        std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> llvmStmts,
-        llvm::Instruction* lastLlvmInst,
-        llvm::BasicBlock* currBlock,
-        std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd,
-        llvm::PHINode* phi
+        std::string opName,
+        std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>>* incomingValBlocksToAdd
     );
+
+    void GeneratePhiNodes(std::string ptxOperandName, int stStmtId);
 
     // Get source operand's value by getting the mapping
     // of the last instruction that used it as destination.
     // isComplex is used when the PTX instructions don't
     // have a direct mapping to LLVM instructions.
-    llvm::Value* GetLlvmRegisterValue(std::string ptxOperandName);
+    llvm::Value* GetLlvmRegisterValue(
+        std::string ptxOperandName,
+        int stStmtId
+    );
 
-    llvm::Value* GetLlvmOperandValue(const std::unique_ptr<Operand>& operand);
+    llvm::Value* GetLlvmOperandValue(
+        const std::unique_ptr<Operand>& operand,
+        std::string ptxType,
+        int stStmtId
+    );
 
-    llvm::Constant* GetLlvmImmediateValue(double value);
+    llvm::Constant* GetLlvmImmediateValue(double value, std::string ptxType);
 
     std::unique_ptr<KernelDirectStatement> GetCurrentKernel();
 
@@ -64,7 +79,8 @@ class InstrStatement : public Statement {
         uint sourceOpNum
     );
     std::vector<uint> GetOperandWriteInstructionIds(
-        std::string operandName
+        std::string operandName,
+        int stStmtId
     );
 
     std::vector<InstrStatement*> GetOperandWriteInstructions(
@@ -95,6 +111,7 @@ public:
     unsigned int getKernelId() const;
     std::string getInst() const;
     std::vector<std::string> getModifiers() const;
+    std::vector<std::string> getTypes() const;
     std::vector<std::unique_ptr<Operand>>& getSourceOps();
     std::vector<std::unique_ptr<Operand>>& getDestOps();
 
