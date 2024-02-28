@@ -144,11 +144,11 @@ void PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(llvm::BasicBlock* bb) {
     for (llvm::BasicBlock* pred : llvm::predecessors(bb)) {
         std::map<std::string, llvm::Value*> predOutMap =
             PtxToLlvmIrConverter::getRegToValueOutMap(pred);
-            // if (predOutMap["%rd67"]) {
-            //     predOutMap["%rd67"]->print(llvm::outs());
-            //     llvm::outs() << "\n";
-            // }
         for (const auto& mapPair : predOutMap) {
+            llvm::Value* pairValue = mapPair.second;
+            std::string key = mapPair.first;
+            // If key exists but is null, skip it
+            if (!pairValue) continue;
             auto result = inMap.insert(mapPair);
             bool isInsertSuccessful = result.second;
             if (!isInsertSuccessful) {
@@ -167,10 +167,6 @@ void PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(llvm::BasicBlock* bb) {
                 PtxToLlvmIrConverter::getRegToValueOutMap(pred);
             llvm::Value* value =
                 PtxToLlvmIrConverter::getRegToValueOutMapValue(pred, reg);
-            // if (reg == "%rd67" && value) {
-            //     value->print(llvm::outs());
-            //     llvm::outs() << "\n";
-            // }
             // TODO: review
             if (!value) break;
             if (!phi) {
@@ -181,10 +177,6 @@ void PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(llvm::BasicBlock* bb) {
                 else 
                     phi = llvm::PHINode::Create(value->getType(), 0, "", &*firstInsertionPt);
             }
-            // if (value == phi) {
-            //     phi->print(llvm::outs());
-            //     llvm::outs() << "\n";
-            // }
             phi->addIncoming(value, pred);
         }
 
@@ -234,8 +226,6 @@ void PtxToLlvmIrConverter::UpdateMapsAndGeneratePhis(llvm::BasicBlock* bb) {
 
         if (phi) {
             inMap[reg] = phi;
-            // phi->print(llvm::outs());
-            // llvm::outs() << "\n";
         }
     }
 

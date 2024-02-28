@@ -654,7 +654,7 @@ Instruction* FindMulShlInUses(
         Instruction* useInst = dyn_cast<Instruction>(use.get());
         uint instOpcode = useInst->getOpcode();
 
-        if (useInst == nullptr || instOpcode != Instruction::PHI) continue;
+        if (useInst == nullptr || instOpcode == Instruction::PHI) continue;
         
         if (
             (instOpcode == Instruction::Mul || instOpcode == Instruction::Shl) &&
@@ -752,8 +752,6 @@ void FixValueUse(BasicBlock* bb, std::vector<BasicBlock*>* visitedBlocks) {
                 FixValueUse(instBlock, visitedBlocks);
             while (&*(instIt++) != bra);
             inst = &*instIt;
-            inst->print(outs());
-            outs() << "\n";
             instBlock = inst->getParent();
         }
 
@@ -795,9 +793,6 @@ std::string ConvertToZ3Syntax(Value* value, bool isBitwiseOp) {
         if (isBitwiseOp)
             return ("((_ int2bv 32) %{" + value->getName().str() + "})");
 
-        // outs() << "Value to be converted:\n";
-        // value->print(outs());
-        // outs() << "\n\n";
         return ("%{" + value->getName().str() + "}");
     }
 }
@@ -1027,6 +1022,7 @@ int main() {
             if (currInst->getNumOperands() == 0) continue;
 
             // currInst->print(outs());
+            // outs() << "\n";
             llvm::Value* firstOperand = currInst->getOperand(0);
             Type::TypeID firstOperandTypeId = firstOperand->getType()->getTypeID();
 
@@ -1370,9 +1366,16 @@ int main() {
             outs() << "Induction Var:\n";
             indVarPhi->print(outs());
             outs() << "\n";
-            // Value* stepValue = indVarPhi->getIncomingValueForBlock(&bb);
             uint indPhiNumValues = indVarPhi->getNumIncomingValues();
-            Value* stepValue = indVarPhi->getIncomingValue(indPhiNumValues - 1);
+            Value* stepValue = nullptr;
+            // Find step value from the incoming value of the loop block
+            for (uint i = 0; i < indPhiNumValues; ++i) {
+                Value* incVal = indVarPhi->getIncomingValue(i);
+                BasicBlock* incBlock = indVarPhi->getIncomingBlock(i);
+                if (dt->dominates(&bb, incBlock)) stepValue = incVal;
+            }
+            assert(stepValue);
+
             Instruction* stepInst = dyn_cast<Instruction>(stepValue);
             Value* secOperand = stepInst->getOperand(1);
             Instruction* secOperandInst = dyn_cast<Instruction>(secOperand);
@@ -1453,15 +1456,13 @@ int main() {
 
             if (loopDirection == Loop::LoopBounds::Direction::Increasing) {
                 loopNumExpr =
-                    "(ceiling (/ " + finalValueStr + " " + 
-                    stepValueStr + "))";
+                    "(ceiling (/ " + finalValueStr + " " + stepValueStr + "))";
                 constraint =
                     "<= " + initialValueStr + " " + loopVarName + " " + finalValueStr;
             }
             else if (loopDirection == Loop::LoopBounds::Direction::Decreasing) {
                 loopNumExpr =
-                    "(ceiling (/ " + initialValueStr + " " + 
-                    stepValueStr + "))";
+                    "(ceiling (/ " + initialValueStr + " " + stepValueStr + "))";
                 constraint =
                     "<= " + finalValueStr + " " + loopVarName + " " + initialValueStr;
             }
