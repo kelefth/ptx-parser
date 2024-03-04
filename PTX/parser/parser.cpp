@@ -652,9 +652,10 @@ Instruction* FindMulShlInUses(
 ) {
     for (llvm::Use &use : uses) {
         Instruction* useInst = dyn_cast<Instruction>(use.get());
-        uint instOpcode = useInst->getOpcode();
+        if (useInst == nullptr) continue;
 
-        if (useInst == nullptr || instOpcode == Instruction::PHI) continue;
+        uint instOpcode = useInst->getOpcode();
+        if (instOpcode == Instruction::PHI) continue;
         
         if (
             (instOpcode == Instruction::Mul || instOpcode == Instruction::Shl) &&
@@ -816,7 +817,8 @@ std::string UnfoldValue(
         {"sdiv",    "/"},
         {"fdiv",    "/"},
         {"and",     "bvand"},
-        {"or",      "bvor"}
+        {"or",      "bvor"},
+        {"not",     "bvnot"}
     };
 
     const std::map<std::string, std::string> llvmIntrinsicZ3Map {

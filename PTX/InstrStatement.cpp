@@ -825,7 +825,7 @@ llvm::Value* InstrStatement::GetLlvmRegisterValue(
 
 llvm::Value* InstrStatement::GetLlvmOperandValue(
     const std::unique_ptr<Operand>& operand,
-    std::string ptxType = "",
+    llvm::Type* type = nullptr,
     int stStmtId = -1
 ) {
     if (stStmtId == -1) stStmtId = getId();
@@ -839,9 +839,19 @@ llvm::Value* InstrStatement::GetLlvmOperandValue(
         operandLlvmValue = GetLlvmRegisterValue(regName, stStmtId);
     }
     else if (operandType == OperandType::Immediate) {
-        if (ptxType == "") ptxType = Types[0];
+        bool isSigned = false;
+        if (!type) {
+            char typePrefix = Types[0][0];
+            // if signed
+            if (typePrefix == 's')
+                isSigned = true;
+
+            type = PtxToLlvmIrConverter::GetTypeMapping(
+                Types[0]
+            )(*PtxToLlvmIrConverter::Context);
+        }
         double value = std::get<double>(operandValue);
-        operandLlvmValue = GetLlvmImmediateValue(value, ptxType);
+        operandLlvmValue = GetLlvmImmediateValue(value, type, isSigned);
     }
 
     return operandLlvmValue;
@@ -849,19 +859,9 @@ llvm::Value* InstrStatement::GetLlvmOperandValue(
 
 llvm::Constant* InstrStatement::GetLlvmImmediateValue(
     double value,
-    std::string ptxType
+    llvm::Type* type,
+    bool isSigned = false
 ) {
-    bool isSigned = false;
-
-    char typePrefix = ptxType[0];
-    // if signed
-    if (typePrefix == 's')
-        isSigned = true;
-
-    llvm::Type* type = PtxToLlvmIrConverter::GetTypeMapping(
-        ptxType
-    )(*PtxToLlvmIrConverter::Context);
-
     if (type->isFloatingPointTy())
         return llvm::ConstantFP::get(type, value);
     else
@@ -2497,6 +2497,23 @@ void InstrStatement::ToLlvmIr() {
             std::pair<llvm::Value*, llvm::BasicBlock*>(orInst, currBlock)
         );
     }
+    else if (Inst == "not") {
+        llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
+        assert(firstOperandValue);
+
+        llvm::Type* type = llvm::Type::getInt32Ty(*PtxToLlvmIrConverter::Context);
+        llvm::Value* ones = llvm::Constant::getAllOnesValue(type);
+
+        llvm::Value* xorInst = PtxToLlvmIrConverter::Builder->CreateXor(
+            firstOperandValue, ones
+        );
+
+        llvm::BasicBlock* currBlock =
+            PtxToLlvmIrConverter::Builder->GetInsertBlock();
+        genLlvmInstructions.push_back(
+            std::pair<llvm::Value*, llvm::BasicBlock*>(xorInst, currBlock)
+        );
+    }
     else if (Inst == "mad") {
         
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
@@ -2601,7 +2618,12 @@ void InstrStatement::ToLlvmIr() {
     }
     else if (Inst == "setp") {
         llvm::Value* firstOperandValue = GetLlvmOperandValue(SourceOps[0]);
-        llvm::Value* secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
+        llvm::Value* secondOperandValue = nullptr;
+        if (SourceOps[1]->getType() == OperandType::Immediate)
+            secondOperandValue = GetLlvmOperandValue(
+                SourceOps[1], firstOperandValue->getType()
+            );
+        else secondOperandValue = GetLlvmOperandValue(SourceOps[1]);
 
         assert(firstOperandValue && secondOperandValue);
 

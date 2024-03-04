@@ -61,11 +61,11 @@ class InstrStatement : public Statement {
 
     llvm::Value* GetLlvmOperandValue(
         const std::unique_ptr<Operand>& operand,
-        std::string ptxType,
+        llvm::Type* type,
         int stStmtId
     );
 
-    llvm::Constant* GetLlvmImmediateValue(double value, std::string ptxType);
+    llvm::Constant* GetLlvmImmediateValue(double value, llvm::Type* type, bool isSigned);
 
     std::unique_ptr<KernelDirectStatement> GetCurrentKernel();
 
