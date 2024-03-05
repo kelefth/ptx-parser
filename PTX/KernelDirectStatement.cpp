@@ -103,21 +103,23 @@ void KernelDirectStatement::ToLlvmIr() {
         *PtxToLlvmIrConverter::Context, "", func
     );
 
+    // Add annotation to identify the function as a kernel
+    llvm::SmallVector<llvm::Metadata *, 3> mds;
+    mds.push_back(llvm::ValueAsMetadata::get(func));
+    mds.push_back(llvm::MDString::get(
+        *PtxToLlvmIrConverter::Context, "kernel"
+    ));
+    mds.push_back(llvm::ValueAsMetadata::get(
+        llvm::ConstantInt::get(
+            llvm::Type::getInt32Ty(*PtxToLlvmIrConverter::Context), 1
+        )
+    ));
+    llvm::MDNode *node = llvm::MDNode::get(*PtxToLlvmIrConverter::Context, mds);
+    llvm::NamedMDNode *nmd =
+        PtxToLlvmIrConverter::Module->getOrInsertNamedMetadata("nvvm.annotations");
+    nmd->addOperand(node);
+
     PtxToLlvmIrConverter::Builder->SetInsertPoint(kernelBlock);
-
-    // // Create allocations for parameters
-    // std::vector<llvm::AllocaInst*> paramAllocs;
-    // for (auto param : params) {
-    //     paramAllocs.push_back(
-    //         PtxToLlvmIrConverter::Builder->CreateAlloca(param)
-    //     );
-    // }
-
-    // // Store parameter values in allocated space
-    // for (int i = 0; i < params.size(); ++i) {
-    //     llvm::Value *value = func->getArg(i);
-    //     PtxToLlvmIrConverter::Builder->CreateStore(value, paramAllocs[i]);
-    // }
 
     // Iterate through the body statements and create
     // instructions
